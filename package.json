@@ -1,0 +1,52 @@
+{
+  "name": "cobweb-mcp",
+  "version": "1.0.0",
+  "description": "Token-efficient MCP server for SAP BW/4HANA modeling with intent-based tools",
+  "type": "module",
+  "main": "dist/server/create-server.js",
+  "bin": {
+    "cobweb-mcp": "dist/transport/stdio.js"
+  },
+  "files": [
+    "dist/",
+    "docs/",
+    "README.md",
+    "LICENSE",
+    "NOTICE"
+  ],
+  "engines": {
+    "node": ">=22.0.0"
+  },
+  "scripts": {
+    "build": "tsc",
+    "typecheck": "tsc --noEmit",
+    "start": "node dist/transport/stdio.js"
+  },
+  "keywords": [
+    "sap",
+    "bw",
+    "bw4hana",
+    "mcp",
+    "model-context-protocol"
+  ],
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "axios": "^1.7.0",
+    "fast-xml-parser": "^5.11.2",
+    "zod": "^4.3.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "typescript": "^5.0.0"
+  },
+  "author": "Oliver Lütte",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/oliverluette/coBWeb-mcp.git"
+  },
+  "homepage": "https://github.com/oliverluette/coBWeb-mcp#readme",
+  "bugs": {
+    "url": "https://github.com/oliverluette/coBWeb-mcp/issues"
+  }
+}

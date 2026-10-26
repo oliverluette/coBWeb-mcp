@@ -1,0 +1,18 @@
+node_modules/
+dist/
+*.log
+.env
+.env.*
+.DS_Store
+logs/
+tests/fixtures/recorded/
+
+# local only: planning documents, measurements, tests and the old history
+.git-private/
+*.bundle
+CONCEPT.md
+REQ.md
+design/
+measurement/
+tests/
+scripts/parity_check.py

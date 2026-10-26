@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 120" width="120" height="120" role="img" aria-label="coBWeb: a data cube in a net">
+  <path d="M60 10 L103.3 35 L60 60 L16.7 35 Z" fill="#0B7A6E" fill-opacity="0.16"/>
+  <path d="M60 33 L83.4 46.5 L83.4 73.5 L60 87 L36.6 73.5 L36.6 46.5 Z" fill="none" stroke="#14213D" stroke-opacity="0.35" stroke-width="2" stroke-linejoin="round"/>
+  <path d="M60 60 L60 10 M60 60 L103.3 85 M60 60 L16.7 85" stroke="#14213D" stroke-opacity="0.35" stroke-width="2" stroke-linecap="round"/>
+  <path d="M60 10 L103.3 35 L103.3 85 L60 110 L16.7 85 L16.7 35 Z" fill="none" stroke="#14213D" stroke-width="4" stroke-linejoin="round"/>
+  <path d="M60 60 L16.7 35 M60 60 L103.3 35 M60 60 L60 110" stroke="#0B7A6E" stroke-width="4.5" stroke-linecap="round"/>
+  <g fill="#14213D">
+    <circle cx="60" cy="10" r="4.5"/><circle cx="103.3" cy="35" r="4.5"/><circle cx="103.3" cy="85" r="4.5"/>
+    <circle cx="60" cy="110" r="4.5"/><circle cx="16.7" cy="85" r="4.5"/><circle cx="16.7" cy="35" r="4.5"/>
+    <circle cx="83.4" cy="73.5" r="3"/><circle cx="36.6" cy="73.5" r="3"/><circle cx="60" cy="33" r="3"/>
+  </g>
+  <circle cx="60" cy="60" r="7.5" fill="#0B7A6E" stroke="#FFFFFF" stroke-width="3"/>
+</svg>
