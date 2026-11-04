@@ -1,6 +1,6 @@
 {
   "name": "cobweb-mcp",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Token-efficient MCP server for SAP BW/4HANA modeling with intent-based tools",
   "type": "module",
   "main": "dist/server/create-server.js",

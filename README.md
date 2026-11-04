@@ -26,6 +26,8 @@ writes that finish a task in few calls:
   Errors say what to change.
 - **Safe by default.** Without flags the server only reads. Writes, data access and runtime
   actions are switched on separately and limited to packages and InfoAreas you allow.
+- **Structured results for programs.** With `COBWEB_STRUCTURED=true`, reads and the data flow
+  also come as JSON with an output schema, for applications that call coBWeb without a model.
 
 ## Tools
 
@@ -176,7 +178,8 @@ For development, point the host's `args` at `scripts/dev-reload.mjs` instead of
 tool list is announced with `notifications/tools/list_changed`; hosts that do not read it again
 need a restart for that.
 
-How the server is built: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+How the server is built: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md). Changes per version:
+[CHANGELOG.md](CHANGELOG.md).
 
 ## Origin
 
