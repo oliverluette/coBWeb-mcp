@@ -7,6 +7,7 @@
  * server runs, and its order is the catalog order (deterministic, cache friendly).
  */
 import type { Tool } from '@modelcontextprotocol/sdk/types.js';
+import { OUTPUT_SCHEMAS } from '../catalog/output-schemas.js';
 import { CATALOG, type JsonObject, type SchemaContext, type ToolSpec } from '../catalog/tools.js';
 import type { BwType } from '../catalog/types.js';
 import type { Config } from '../config.js';
@@ -73,6 +74,8 @@ export function buildSurface(config: Config, opts: SurfaceOptions): OfferedTool[
       inputSchema: schema as Tool['inputSchema'],
       annotations: annotations(spec, actions),
     };
+    // Only for programs (COBWEB_STRUCTURED): the schema is part of every tools/list.
+    if (config.structured && OUTPUT_SCHEMAS[spec.name]) definition.outputSchema = OUTPUT_SCHEMAS[spec.name] as Tool['outputSchema'];
     if (ALWAYS_LOAD.has(spec.name)) definition._meta = { 'anthropic/alwaysLoad': true };
     offered.push({ spec, ctx, schema, definition });
   }

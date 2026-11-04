@@ -46,6 +46,7 @@ import {
   type Spec,
   type WriteAction,
 } from './adapter.js';
+import { isHeadPart, objectHead, objectRef } from '../format/structured.js';
 
 const PRESETS = Object.keys(typePresets);
 const NAMES = { type: 'array', items: { type: 'string' } };
@@ -452,6 +453,14 @@ export const adsoAdapter: ObjectAdapter = {
     const { xml } = await readDoc(name);
     if (detail === 'raw') return xml;
     const m = parseAdso(name, xml);
+    const headPart = isHeadPart(part);
+    if (headPart) {
+      const text = summarizeAdso(m, detail === 'full' ? 'full' : 'summary', 'keys');
+      return {
+        text: headPart === 'head' ? text.split('\n')[0] : text,
+        structured: objectHead(objectRef('ADSO', m.name), { status: m.status, description: m.label, infoArea: m.infoArea, package: m.package, keys: m.keys }),
+      };
+    }
     if (part?.toLowerCase() === 'push_schema') {
       const text = await bwGetPushSchema(_client, name);
       const { parsePushSchema, summarizePushSchema } = await import('../tools/runtime.js');

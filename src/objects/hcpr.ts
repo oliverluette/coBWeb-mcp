@@ -37,6 +37,7 @@ import {
   type Spec,
   type WriteAction,
 } from './adapter.js';
+import { answer, objectRef, statusFields } from '../format/structured.js';
 
 const INPUT: JsonObject = {
   type: 'object',
@@ -279,6 +280,44 @@ export function summarizeHcpr(m: HcprModel, part?: string, detail: 'summary' | '
   return [head, ...inputs, ...fields].join('\n');
 }
 
+/** cobweb.hcpr/1: head, inputs with their mappings, fields and joins. */
+export function hcprData(m: HcprModel) {
+  return {
+    ...objectRef('HCPR', m.name),
+    ...statusFields(m.status),
+    description: m.label,
+    composition: m.view,
+    info_area: m.infoArea ?? null,
+    package: m.package ?? null,
+    stackable: m.stackable,
+    default_node: m.defaultNode ?? null,
+    inputs: m.inputs.map((i) => {
+      // BW names an input <node>.<provider type>.<n>, e.g. U1.ADSO.1.
+      const t = i.alias.split('.')[1]?.toUpperCase();
+      const type = t && /^[A-Z]{4}$/.test(t) ? t : null;
+      return {
+        alias: i.alias,
+        provider: type ? objectRef(type, i.provider).ref : i.provider,
+        provider_type: type,
+        provider_name: i.provider,
+        mappings: i.mappings,
+        pairs: i.pairs.map((p) => ({ target: p.target, source: p.source ?? null, constant: p.constant ?? null })),
+      };
+    }),
+    fields: m.fields.map((f) => ({
+      name: f.name,
+      description: f.label,
+      info_object: f.infoObject ?? null,
+      key_figure: f.keyFigure,
+      data_type: f.dataType || null,
+      size: f.size || null,
+      aggregation: f.aggregation ?? null,
+      group: f.group ?? null,
+    })),
+    joins: m.joins.map((j) => ({ left: j.left, right: j.right, type: j.type, on: j.on })),
+  };
+}
+
 async function readXml(name: string): Promise<string> {
   return (await freshRead(`/sap/bw/modeling/hcpr/${bwSeg(name.toLowerCase())}/m`, HCPR_ACCEPT)).body;
 }
@@ -456,7 +495,8 @@ export const hcprAdapter: ObjectAdapter = {
     if (detail === 'raw') return xml;
     const m = parseHcpr(name, xml);
     if (part?.toLowerCase() === 'planning') return `${summarizeHcpr(m, part, 'summary').split('\n')[0]}\n${await planningPart(_client, name)}`;
-    return summarizeHcpr(m, part, detail === 'full' ? 'full' : 'summary');
+    // The structured result holds the whole model, whatever part the text shows.
+    return answer(summarizeHcpr(m, part, detail === 'full' ? 'full' : 'summary'), 'cobweb.hcpr/1', hcprData(m));
   },
 
   async create(name, spec, ctx) {

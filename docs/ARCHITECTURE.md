@@ -15,12 +15,18 @@ coBWeb is a TypeScript MCP server (stdio) for one BW system per process.
 4. **Handler** (`src/tools/`): one module per tool group.
 5. **Result** (`src/format/`): errors become tool results with a cause and a hint; every result
    is cut at `COBWEB_MAX_RESULT_CHARS` with a note on how to read the rest.
+6. **Structured results** (`src/format/structured.ts`, `src/catalog/output-schemas.ts`), only with
+   `COBWEB_STRUCTURED=true`: a handler returns its text and an envelope built from the same model
+   (no second BW call, no parsing of the text). The tools with an output schema put it into
+   `structuredContent`, errors as `cobweb.error/1`; plain text answers become
+   `cobweb.unstructured/1`. Without the flag the envelope is dropped and the tool list has no
+   output schemas.
 
 ## Modules
 
 | Folder | Content |
 |---|---|
-| `src/catalog/` | tool definitions and object type codes |
+| `src/catalog/` | tool definitions, output schemas of the structured results, object type codes |
 | `src/server/` | MCP server, tool surface, handshake instructions, audit log |
 | `src/policy/` | operation classes, allow and deny rules |
 | `src/tools/` | handlers: search, read, context, describe, write, activate, data, monitor, run, transport, system |

@@ -24,6 +24,7 @@ import {
   type Spec,
   type WriteAction,
 } from './adapter.js';
+import { isHeadPart, objectHead, objectRef } from '../format/structured.js';
 
 const TRCS_MEDIA = 'application/vnd.sap.bw.modeling.trcs-v1_0_0+xml';
 const NAMES: JsonObject = { type: 'array', items: { type: 'string' } };
@@ -310,7 +311,16 @@ export const trcsAdapter: ObjectAdapter = {
   async read(_client, name, { detail, part }) {
     const xml = await readXml(name);
     if (detail === 'raw') return xml;
-    return summarizeTrcs(parseTrcs(name, xml), part);
+    const m = parseTrcs(name, xml);
+    const headPart = isHeadPart(part);
+    if (headPart) {
+      const text = summarizeTrcs(m, 'keys');
+      return {
+        text: headPart === 'head' ? text.split('\n')[0] : text,
+        structured: objectHead(objectRef('TRCS', m.name), { status: m.status, description: m.label, infoArea: m.infoArea, package: m.package, keys: m.keys }),
+      };
+    }
+    return summarizeTrcs(m, part);
   },
 
   async create(name, spec, ctx) {

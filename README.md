@@ -111,6 +111,7 @@ Tools and safety (all optional; without flags the server is read-only):
 | `COBWEB_MAX_RESULT_CHARS` | `20000` | upper bound of every tool result |
 | `COBWEB_AUDIT_FILE` | – | file for the audit log (one JSON line per written object) |
 | `COBWEB_LOG_LEVEL` | `info` | `error`, `warn`, `info`, `debug` (stderr) |
+| `COBWEB_STRUCTURED` | `false` | structured results for programs, not for model clients (see [docs/TOOLS.md](docs/TOOLS.md#structured-results-cobweb_structuredtrue)) |
 
 Profiles:
 

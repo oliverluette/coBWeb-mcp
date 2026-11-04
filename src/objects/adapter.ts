@@ -8,6 +8,7 @@
 import type { BwClient } from '../bw/client.js';
 import type { BwType } from '../catalog/types.js';
 import type { JsonObject } from '../catalog/tools.js';
+import type { Answer } from '../format/structured.js';
 
 export type WriteAction = 'create' | 'update' | 'delete';
 export type Detail = 'summary' | 'full' | 'raw';
@@ -67,7 +68,8 @@ export interface ObjectReader {
   label: string;
   /** Does the object exist, and where does it live? sourceSystem only for RSDS. */
   locate(client: BwClient, name: string, sourceSystem?: string): Promise<Location>;
-  read(client: BwClient, name: string, opts: ReadOptions): Promise<string>;
+  /** Text, or text plus a structured envelope (COBWEB_STRUCTURED). */
+  read(client: BwClient, name: string, opts: ReadOptions): Promise<Answer>;
 }
 
 export interface ReadOptions {

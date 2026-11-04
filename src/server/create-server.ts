@@ -9,6 +9,7 @@ import { createClientFromEnv } from '../bw/client.js';
 import { catalogEntry, type JsonObject } from '../catalog/tools.js';
 import type { Config } from '../config.js';
 import { ToolError, classify, errorText } from '../format/errors.js';
+import { envelopeOf, errorEnvelope, textOf } from '../format/structured.js';
 import { truncate } from '../format/truncate.js';
 import { validateArgs } from '../format/validate.js';
 import { log } from '../log.js';
@@ -92,9 +93,12 @@ function checkDenied(o: OfferedTool, args: JsonObject, state: ServerState): void
 
 export async function callTool(name: string, rawArgs: Record<string, unknown> | undefined, state: ServerState): Promise<CallToolResult> {
   const started = Date.now();
+  // With an output schema (COBWEB_STRUCTURED) every result, errors included, carries an envelope.
+  let structured = false;
   try {
     const offered = state.offered.find((o) => o.spec.name === name);
     if (!offered) throw whyNotOffered(name, state);
+    structured = offered.definition.outputSchema !== undefined;
     const { value, errors } = validateArgs(offered.schema, rawArgs);
     if (errors.length > 0) {
       throw new ToolError('validation', `Invalid arguments for ${name}: ${errors.join('; ')}.`, 'Fix the listed parameters and call again.');
@@ -102,13 +106,19 @@ export async function callTool(name: string, rawArgs: Record<string, unknown> | 
     checkDenied(offered, value, state);
     const handler = state.handlers[name];
     if (!handler) throw whyNotOffered(name, state);
-    const text = await handler(value, state.context);
+    const result = await handler(value, state.context);
+    const text = textOf(result);
     log('debug', `${name} ok in ${Date.now() - started} ms, ${text.length} chars`);
-    return { content: [{ type: 'text', text: truncate(text, state.context.config.maxResultChars) }] };
+    // The size cap applies to the text only; structured data is complete.
+    const out: CallToolResult = { content: [{ type: 'text', text: truncate(text, state.context.config.maxResultChars) }] };
+    if (structured) out.structuredContent = envelopeOf(result) as unknown as Record<string, unknown>;
+    return out;
   } catch (err) {
     const e = classify(err);
     log('debug', `${name} failed (${e.kind}) in ${Date.now() - started} ms`);
-    return { content: [{ type: 'text', text: errorText(e) }], isError: true };
+    const out: CallToolResult = { content: [{ type: 'text', text: errorText(e) }], isError: true };
+    if (structured) out.structuredContent = errorEnvelope(e) as unknown as Record<string, unknown>;
+    return out;
   }
 }
 

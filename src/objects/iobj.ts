@@ -23,6 +23,7 @@ import {
   type Spec,
   type WriteAction,
 } from './adapter.js';
+import { isHeadPart, objectHead, objectRef } from '../format/structured.js';
 
 /** Key figure data types: modeler names and the BW codes they stand for (both accepted). */
 const KYF_TYPES: Record<string, string> = {
@@ -305,6 +306,13 @@ export const iobjAdapter: ObjectAdapter = {
     const xml = await readXml(name);
     if (detail === 'raw') return xml;
     const m = parseIobj(name, xml);
+    if (part?.toLowerCase() === 'head') {
+      // An InfoObject has no keys part; its head is the first line of the summary.
+      return {
+        text: summarizeIobj(m, 'summary').split('\n')[0],
+        structured: objectHead(objectRef('IOBJ', m.name), { status: m.status, description: m.description, infoArea: m.infoArea, package: m.package }),
+      };
+    }
     if (part?.toLowerCase() === 'hierarchies') {
       const head = summarizeIobj(m, 'summary').split('\n')[0];
       if (m.kind === 'KYF') return `${head}\nA key figure has no hierarchies.`;

@@ -23,6 +23,7 @@ import {
 } from './adapter.js';
 import { attr, endLabel, flowEnd, flowIdentity, objectStatus, parseIdentity, sameTitle, splitDataSource, startTag, trfnTitle, type FlowEnd } from './flow.js';
 import { findTrfn } from './trfn.js';
+import { answer, numberOrNull, objectRef, statusFields } from '../format/structured.js';
 
 /** Source or target of a DTP: the `tlogo` attribute holds the object type (type says DTASRC). */
 function dtpEnd(xml: string, element: 'source' | 'target'): { type: string; name: string; sourceSystem?: string } {
@@ -59,6 +60,40 @@ export function summarizeDtp(name: string, xml: string, info: DtpInfo, part?: st
   return lines.join('\n');
 }
 
+/** cobweb.dtpa/1: head, mode, ends, filter and semantic group. */
+export function dtpData(name: string, xml: string, info: DtpInfo) {
+  const src = dtpEnd(xml, 'source');
+  const tgt = dtpEnd(xml, 'target');
+  const raw = info.extractionMode ?? '';
+  return {
+    ...objectRef('DTPA', name.toUpperCase()),
+    ...statusFields(objectStatus(xml, info.status)),
+    description: xmlDecode(info.description),
+    mode: raw === 'F' ? 'full' : raw === 'D' ? 'delta' : 'other',
+    mode_raw: raw,
+    package_size: numberOrNull(info.packageSize),
+    source: objectRef(src.type, src.name, src.sourceSystem).ref,
+    target: objectRef(tgt.type, tgt.name, tgt.sourceSystem).ref,
+    transformation: info.transformation.name ? objectRef('TRFN', info.transformation.name).ref : null,
+    filter: info.filterFields
+      .filter((f) => f.selections.length > 0 || f.hasRoutine)
+      .map((f) => ({
+        field: f.name,
+        has_routine: f.hasRoutine,
+        routine_lines: f.routineCode.length,
+        selections: f.selections.map((s) => ({
+          operator: OP_NAMES[s.operator] ?? s.operator,
+          excluding: Boolean(s.excluding),
+          low: s.low,
+          high: s.operator === 'Between' && s.high ? s.high : null,
+        })),
+      })),
+    selectable_without_value: info.filterFields.filter((f) => f.selections.length === 0 && !f.hasRoutine && f.selected).map((f) => f.name),
+    semantic_group: info.semanticGroupFields.filter((f) => f.isKey).map((f) => f.name),
+    global_routine_lines: info.globalRoutineCode.length,
+  };
+}
+
 async function readDoc(name: string): Promise<{ xml: string; status: string }> {
   // Fresh session: the shared client's buffer may serve a stale shadow of a DTP it touched.
   const r = await freshRead(`/sap/bw/modeling/dtpa/${bwSeg(name.toLowerCase())}/m`, MEDIA_TYPES['dtpa']);
@@ -79,7 +114,8 @@ export const dtpaReader: ObjectReader = {
   async read(_client: BwClient, name: string, { detail, part }: ReadOptions) {
     const { xml, status } = await readDoc(name);
     if (detail === 'raw') return xml;
-    return summarizeDtp(name, xml, parseDtpXml(xml, status), part);
+    const info = parseDtpXml(xml, status);
+    return answer(summarizeDtp(name, xml, info, part), 'cobweb.dtpa/1', dtpData(name, xml, info));
   },
 };
 

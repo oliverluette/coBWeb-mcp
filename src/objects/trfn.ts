@@ -45,6 +45,7 @@ import {
   wrapNames,
   type FlowEnd,
 } from './flow.js';
+import { answer, objectRef, statusFields } from '../format/structured.js';
 
 export interface TrfnEnd {
   type: string;
@@ -154,6 +155,36 @@ export function parseTrfn(name: string, xml: string, headerStatus?: string): Trf
   };
 }
 
+/** "CLASS.METHOD" of a routine as two fields; "yes" (routine without reference) as nulls. */
+function routineRef(r: string | undefined): { class: string | null; method: string | null } | null {
+  if (!r) return null;
+  if (r === 'yes') return { class: null, method: null };
+  const dot = r.lastIndexOf('.');
+  return dot > 0 ? { class: r.slice(0, dot), method: r.slice(dot + 1) || null } : { class: r, method: null };
+}
+
+function trfnEndData(e: TrfnEnd) {
+  const r = objectRef(e.type, e.name, e.sourceSystem, e.part);
+  return { ...r, part: r.part ?? null, description: e.description ?? null };
+}
+
+/** cobweb.trfn/1: head, ends, routines, rules and fields. */
+export function trfnData(m: TrfnModel) {
+  return {
+    ...objectRef('TRFN', m.name),
+    ...statusFields(m.status),
+    description: m.description,
+    package: m.package ?? null,
+    runtime: m.hana === undefined ? null : m.hana ? 'hana' : 'abap',
+    source: trfnEndData(m.source),
+    target: trfnEndData(m.target),
+    routines: { start: routineRef(m.routines.start), end: routineRef(m.routines.end), expert: routineRef(m.routines.expert) },
+    rules: m.rules.map((r) => ({ kind: r.kind, sources: r.sources, targets: r.targets, detail: r.detail ?? null })),
+    source_fields: m.source.fields,
+    target_fields: m.target.fields,
+  };
+}
+
 export function summarizeTrfn(m: TrfnModel, part?: string): string {
   const head = [
     `TRFN ${m.name} "${m.description}" · ${statusText(m.status)}${m.hana === undefined ? '' : m.hana ? ' · HANA runtime' : ' · ABAP runtime'}`,
@@ -217,7 +248,9 @@ export const trfnReader: ObjectReader = {
     const { xml, status } = await readDoc(name);
     if (detail === 'raw') return xml;
     const m = parseTrfn(name, xml, status);
-    return detail === 'full' && !part ? [summarizeTrfn(m), ...summarizeTrfn(m, 'fields').split('\n').slice(2)].join('\n') : summarizeTrfn(m, part);
+    const text = detail === 'full' && !part ? [summarizeTrfn(m), ...summarizeTrfn(m, 'fields').split('\n').slice(2)].join('\n') : summarizeTrfn(m, part);
+    // The structured result holds the whole model, whatever part the text shows.
+    return answer(text, 'cobweb.trfn/1', trfnData(m));
   },
 };
 

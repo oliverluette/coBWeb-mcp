@@ -11,6 +11,7 @@ import { TYPE_INFO, isBwType, typeFromSearch, type BwType } from '../catalog/typ
 import type { JsonObject } from '../catalog/tools.js';
 import { ToolError } from '../format/errors.js';
 import type { BwLike, HandlerContext } from './context.js';
+import { answer, objectRef, statusFields, type Structured } from '../format/structured.js';
 
 export interface Hit {
   type: string;
@@ -188,7 +189,23 @@ export function formatHits(hits: Hit[], header: string, limit: number, notes: st
   return lines.join('\n');
 }
 
-export async function bwSearch(args: JsonObject, ctx: HandlerContext): Promise<string> {
+/** cobweb.search/1: all hits up to limit, with the counts the text shows. */
+export function searchData(hits: Hit[], limit: number, q: { query: string; infoArea: string; sourceSystem: string; types: string[] }, notes: string[]) {
+  const shown = hits.slice(0, limit);
+  return {
+    query: q.query || null,
+    info_area: q.infoArea || null,
+    source_system: q.sourceSystem || null,
+    types: q.types,
+    total: hits.length,
+    returned: shown.length,
+    truncated: hits.length > shown.length,
+    hits: shown.map((h) => ({ ...objectRef(h.type, h.name, h.sourceSystem), ...statusFields(h.status), description: h.title })),
+    notes,
+  };
+}
+
+export async function bwSearch(args: JsonObject, ctx: HandlerContext): Promise<Structured> {
   const query = typeof args.query === 'string' ? args.query.trim() : '';
   const infoArea = typeof args.info_area === 'string' ? args.info_area.trim().toUpperCase() : '';
   const limit = typeof args.limit === 'number' ? args.limit : 50;
@@ -222,5 +239,5 @@ export async function bwSearch(args: JsonObject, ctx: HandlerContext): Promise<s
     );
   }
   if (types.length > 0) header += ` (types ${types.join(', ')})`;
-  return formatHits(hits, header, limit, notes);
+  return answer(formatHits(hits, header, limit, notes), 'cobweb.search/1', searchData(hits, limit, { query, infoArea, sourceSystem, types }, notes));
 }

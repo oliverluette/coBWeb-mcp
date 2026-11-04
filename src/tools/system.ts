@@ -6,6 +6,7 @@ import { ensurePlatform, parseSysProps } from '../bw/platform.js';
 import { BW_TYPES, TYPE_INFO, isBwType, type BwType } from '../catalog/types.js';
 import type { JsonObject } from '../catalog/tools.js';
 import { ToolError } from '../format/errors.js';
+import { answer, type Answer, type Structured } from '../format/structured.js';
 import { VERSION } from '../version.js';
 import type { HandlerContext } from './context.js';
 
@@ -34,7 +35,7 @@ export function serverSection(ctx: HandlerContext): string[] {
   ];
 }
 
-async function profile(ctx: HandlerContext): Promise<string> {
+async function profile(ctx: HandlerContext): Promise<Structured> {
   const client = ctx.client();
   const platform = await ensurePlatform(client as unknown as BwClient);
   const { body } = await client.get('/sap/bw/modeling/repo/is/systeminfo', 'application/xml');
@@ -71,7 +72,33 @@ async function profile(ctx: HandlerContext): Promise<string> {
     if (missing.length > 0) out.push(`  Not published:    ${missing.join(' ')}`);
   }
   out.push(...serverSection(ctx));
-  return out.join('\n');
+  const c = ctx.config;
+  const known = (v: string | undefined) => (v && v !== '?' ? v : null);
+  return answer(out.join('\n'), 'cobweb.system/1', {
+    cobweb_version: VERSION,
+    platform: platform.platform === 'bw4' ? 'bw4' : 'classic',
+    platform_detail: platform.detail,
+    host: known(host),
+    logical_system: known(props['system.logsys']),
+    release: known(props['system.server_version']),
+    database: known(db),
+    language: known(props['system.language']),
+    bw_changeable: known(changeable),
+    basis_changeable: known(basis),
+    planning_supported: props['bw.planning_supported'] === 'X',
+    profile: c.profile,
+    tools: [...ctx.offered],
+    types: [...c.types],
+    structured: c.structured,
+    writes: c.allowWrites,
+    data_access: c.allowData,
+    runtime_actions: c.allowExecute,
+    allowed_packages: [...c.allowedPackages],
+    allowed_info_areas: [...c.allowedInfoAreas],
+    denied_actions: [...c.denyActions],
+    max_result_chars: c.maxResultChars,
+    audit_log: Boolean(c.auditFile),
+  });
 }
 
 async function unlock(args: JsonObject, ctx: HandlerContext): Promise<string> {
@@ -87,6 +114,6 @@ async function unlock(args: JsonObject, ctx: HandlerContext): Promise<string> {
   return `Unlocked ${type} ${name}: the lock this server held is released. A lock held by another user or session is not affected.`;
 }
 
-export async function bwSystem(args: JsonObject, ctx: HandlerContext): Promise<string> {
+export async function bwSystem(args: JsonObject, ctx: HandlerContext): Promise<Answer> {
   return args.action === 'unlock' ? unlock(args, ctx) : profile(ctx);
 }

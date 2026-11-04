@@ -46,6 +46,8 @@ export interface Config {
   logLevel: LogLevel;
   /** File that receives one JSON line per write (COBWEB_AUDIT_FILE); no audit when unset. */
   auditFile?: string;
+  /** Structured results for programs (COBWEB_STRUCTURED): outputSchema and structuredContent. */
+  structured: boolean;
 }
 
 export class ConfigError extends Error {
@@ -119,6 +121,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     denyActions: list(env.COBWEB_DENY_ACTIONS),
     maxResultChars,
     logLevel: level as LogLevel,
+    structured: flag(env.COBWEB_STRUCTURED),
     ...(env.COBWEB_AUDIT_FILE?.trim() ? { auditFile: env.COBWEB_AUDIT_FILE.trim() } : {}),
   };
 }

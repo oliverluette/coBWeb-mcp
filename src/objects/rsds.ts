@@ -19,6 +19,7 @@ import {
   type WriteAction,
 } from './adapter.js';
 import { attr, objectStatus, startTag } from './flow.js';
+import { isHeadPart, objectHead, objectRef } from '../format/structured.js';
 
 const RSDS_ACCEPT = 'application/vnd.sap.bw.modeling.rsds-v1_0_0+xml, application/vnd.sap.bw.modeling.rsds-v1_1_0+xml';
 
@@ -121,7 +122,16 @@ export const rsdsReader: ObjectReader = {
     const lsys = needSystem(sourceSystem);
     const { xml, status } = await readDoc(client, name, lsys);
     if (detail === 'raw') return xml;
-    return summarizeRsds(parseRsds(name, lsys, xml, status), part);
+    const m = parseRsds(name, lsys, xml, status);
+    const headPart = isHeadPart(part);
+    if (headPart) {
+      const text = summarizeRsds(m, 'keys');
+      return {
+        text: headPart === 'head' ? text.split('\n')[0] : text,
+        structured: objectHead(objectRef('RSDS', m.name, m.sourceSystem), { status: m.status, description: m.description, package: m.package, keys: m.fields.filter((f) => f.key).map((f) => f.name) }),
+      };
+    }
+    return summarizeRsds(m, part);
   },
 };
 

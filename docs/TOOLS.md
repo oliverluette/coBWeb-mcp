@@ -151,3 +151,44 @@ InfoAreas).
 |---|---|
 | `profile` | release, platform, enabled types, safety settings and naming rules |
 | `unlock` | release a lock this server still holds after an aborted change (`type`, `name`) |
+
+## Structured results (`COBWEB_STRUCTURED=true`)
+
+For programs that call coBWeb without a language model, e.g. an application that draws the data
+flow. Off by default: then `tools/list` and every answer stay exactly as described above.
+
+With the flag, `bw_search`, `bw_read`, `bw_context` and `bw_system` offer an `outputSchema`, and
+each of their answers carries `structuredContent` next to the unchanged text. The size limit
+`COBWEB_MAX_RESULT_CHARS` applies to the text only; structured data is complete. The flag grants
+no rights: reading and writing are still governed by the other flags. Do not set it for model
+clients: the schemas cost tokens in every request, and some clients pass `structuredContent` to
+the model.
+
+Every answer is an envelope `{"schema": "cobweb.<kind>/<version>", "data": …}`:
+
+| Schema | Tool | Content |
+|---|---|---|
+| `cobweb.dataflow/1` | `bw_context` (dataflow) | `root`, `direction`, `depth`, `objects` and `flows` (transformations, DTPs), each with `sources` and `targets` as references, `unresolved` |
+| `cobweb.where_used/1` | `bw_context` (where_used) | `root`, `hits` with `side` (`up`, `down`, `other`) and, for flows, `flow` with both ends |
+| `cobweb.search/1` | `bw_search` | `hits`, `total`, `returned`, `truncated`, `notes` |
+| `cobweb.system/1` | `bw_system` (profile) | release, platform, `cobweb_version`, safety settings as booleans |
+| `cobweb.hcpr/1` | `bw_read` HCPR | head, `composition`, `inputs` with mappings, `fields`, `joins` |
+| `cobweb.trfn/1` | `bw_read` TRFN | head, `runtime`, `source`, `target`, `routines` (class, method), `rules`, fields |
+| `cobweb.dtpa/1` | `bw_read` DTPA | head, `mode`/`mode_raw`, `source`, `target`, `transformation`, `filter`, `semantic_group` |
+| `cobweb.object_head/1` | `bw_read` ADSO, IOBJ, RSDS, TRCS with `part="head"` (or `"keys"`) | `status`, `description`, `info_area`, `package`, `keys` |
+| `cobweb.unstructured/1` | any of the four | the call succeeded, but this type or option has text only (e.g. `detail="raw"`); `data` is `null` |
+| `cobweb.error/1` | any of the four | `isError`; `data` = `{kind, message, hint}` |
+
+HCPR, TRFN and DTPA return the whole model whatever `part` or `detail` the text shows.
+
+Rules for the data:
+
+- **References:** `ref` is `TYPE:NAME`, `RSDS:NAME:SOURCE_SYSTEM` for DataSources and
+  `IOBJ:NAME:attr`, `:text` or `:hier` for the parts of an InfoObject. Query elements are named by
+  their type (`QUERY`, `VARIABLE`, …), not `ELEM`. Every object also has `type`, `name` and,
+  where it applies, `source_system` and `part`.
+- **Status:** `active`, `inactive`, `revised` or `new`; any other BW value is `unknown`, with the
+  BW value in `status_raw`. Objects without a status (source systems) have `null`.
+- **Fields:** `snake_case`, numbers as numbers, no formatting. New optional fields keep the
+  version; renamed or removed fields raise it.
+- `total` of `bw_search` counts the hits BW returned.

@@ -16,6 +16,7 @@ import { ADAPTERS, READERS } from '../objects/registry.js';
 import { auditSink } from '../server/audit.js';
 import { xref } from './relations.js';
 import type { HandlerContext } from './context.js';
+import type { Answer } from '../format/structured.js';
 
 function adapterFor(type: unknown, tool: string): ObjectAdapter {
   const t = String(type ?? '').toUpperCase() as BwType;
@@ -41,7 +42,7 @@ function readerFor(type: unknown): ObjectReader {
   return reader;
 }
 
-export async function bwRead(args: JsonObject, ctx: HandlerContext): Promise<string> {
+export async function bwRead(args: JsonObject, ctx: HandlerContext): Promise<Answer> {
   const reader = readerFor(args.type);
   const name = String(args.name).trim().toUpperCase();
   const sourceSystem = typeof args.source_system === 'string' ? args.source_system.trim().toUpperCase() : undefined;

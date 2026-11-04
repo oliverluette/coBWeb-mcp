@@ -1,5 +1,6 @@
 import type { JsonObject } from '../catalog/tools.js';
 import type { Config } from '../config.js';
+import type { Answer } from '../format/structured.js';
 
 /** The part of the BW client the tools use; tests pass a fake. */
 export interface BwLike {
@@ -17,4 +18,5 @@ export interface HandlerContext {
   actions: Readonly<Record<string, readonly string[]>>;
 }
 
-export type Handler = (args: JsonObject, ctx: HandlerContext) => Promise<string>;
+/** Text, or text plus a structured envelope from the same model (see format/structured.ts). */
+export type Handler = (args: JsonObject, ctx: HandlerContext) => Promise<Answer>;
