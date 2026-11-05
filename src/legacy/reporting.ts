@@ -15,6 +15,8 @@ export interface InfoObjectState {
   name: string;
   id: string;
   axis: string;
+  /** Position on the axis, from 1; 0 lets BW choose. */
+  pos?: number;
   hierarchy?: {
     id: string;
     name: string;
@@ -251,7 +253,7 @@ export function parseVariablesContainer(xml: string): VariablesContainer | null 
 interface SpaceFilter {
   id: string;
   name: string;
-  selectValues: Array<{ lowInt: string; op: string; sign: string }>;
+  selectValues: Array<{ lowInt: string; highInt: string; op: string; sign: string }>;
 }
 
 function parseSpace(xml: string): SpaceFilter[] {
@@ -270,6 +272,7 @@ function parseSpace(xml: string): SpaceFilter[] {
       const svA = sv[1];
       selectValues.push({
         lowInt: attr(svA, 'lowInt') ?? attr(svA, 'low') ?? '',
+        highInt: attr(svA, 'highInt') ?? attr(svA, 'high') ?? '',
         op: attr(svA, 'op') ?? '',
         sign: attr(svA, 'sign') ?? '',
       });
@@ -487,7 +490,7 @@ function renderQueryDataText(xml: string, isGet: boolean, findings: string[] = [
     lines.push('');
     lines.push('── Background Filters (query-defined, read-only) ──');
     for (const f of spaceFilters) {
-      const vals = f.selectValues.map(sv => `${sv.sign}${sv.op} ${sv.lowInt}`).join(', ');
+      const vals = f.selectValues.map(sv => `${sv.sign}${sv.op} ${sv.lowInt}${sv.highInt ? `..${sv.highInt}` : ''}`).join(', ');
       lines.push(`  ${f.name}: ${vals}`);
     }
   }
@@ -711,7 +714,7 @@ export function buildPostBody(
     for (const io of state.infoObjects) {
       const hasFilter = io.filterValues && io.filterValues.length > 0;
       if (hasFilter || io.hierarchy) {
-        parts.push(`      <infoObject name="${xmlEscape(io.name)}" id="${xmlEscape(io.id)}" axis="${xmlEscape(io.axis)}" pos="0">`);
+        parts.push(`      <infoObject name="${xmlEscape(io.name)}" id="${xmlEscape(io.id)}" axis="${xmlEscape(io.axis)}" pos="${io.pos ?? 0}">`);
         if (io.hierarchy) {
           const hFrom = io.hierarchy.hryDateFrom ?? '00000000';
           const hTo = io.hierarchy.hryDateTo ?? '99991231';
@@ -736,7 +739,7 @@ export function buildPostBody(
         }
         parts.push(`      </infoObject>`);
       } else {
-        parts.push(`      <infoObject name="${xmlEscape(io.name)}" id="${xmlEscape(io.id)}" axis="${xmlEscape(io.axis)}" pos="0"/>`);
+        parts.push(`      <infoObject name="${xmlEscape(io.name)}" id="${xmlEscape(io.id)}" axis="${xmlEscape(io.axis)}" pos="${io.pos ?? 0}"/>`);
       }
     }
     parts.push(`    </state>`);

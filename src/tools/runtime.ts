@@ -29,6 +29,7 @@ import { bwGetFilterValues, bwQueryData, parseMetaData, parseVariablesContainer,
 import { bwActivateRequest, bwDeleteRequest, bwGetRequest, bwListRequests } from '../legacy/request_monitor.js';
 import { bwCreateTransportTask } from '../legacy/transport.js';
 import { READERS } from '../objects/registry.js';
+import { queryLayout } from '../objects/query.js';
 import { MEDIA_TYPES, bwSeg, freshRead } from '../bw/client.js';
 import { dateFormatOf, externalDate } from '../objects/dtpa.js';
 import { matchesAny } from '../policy/policy.js';
@@ -153,14 +154,20 @@ export function buildState(metaXml: string, args: JsonObject): { state?: { infoO
   let state: { infoObjects: InfoObjectState[] } | undefined;
   if (layout || filters.length) {
     state = {
-      infoObjects: chars.map((c) => {
+      // A characteristic without an axis is restricted in the fixed filter and not navigable:
+      // placing it in the free area empties the key figure structure of the result.
+      infoObjects: chars.filter((c) => c.axis || rows.some((r) => find(r) === c) || columns.some((r) => find(r) === c) || filters.some((f) => find(String(f['field'])) === c)).map((c) => {
         const inRows = rows.some((r) => find(r) === c);
         const inCols = columns.some((r) => find(r) === c);
         const axis = inRows ? 'ROWS' : inCols ? 'COLUMNS' : layout && c.isStructure !== 'true' ? 'FREE' : c.axis || 'FREE';
         const fv = filters.filter((f) => find(String(f['field'])) === c).flatMap(filterValues);
-        return { name: c.name, id: c.id, axis, ...(fv.length ? { filterValues: fv } : {}) };
+        const order = inRows ? rows.findIndex((r) => find(r) === c) : inCols ? columns.findIndex((r) => find(r) === c) : -1;
+        return { name: c.name, id: c.id, axis, pos: order + 1, ...(fv.length ? { filterValues: fv } : {}) };
       }),
     };
+    // BW lays the axes out in the order of the state, whatever the positions say.
+    const rank = (io: InfoObjectState) => (io.pos ? (io.axis === 'ROWS' ? 0 : 1) * 1000 + io.pos : 2000);
+    state.infoObjects.sort((a, b) => rank(a) - rank(b));
   }
   const given = (args['variables'] as Record<string, unknown> | undefined) ?? {};
   let variables: VariableInput[] | undefined;
@@ -242,6 +249,25 @@ export function variableRefusal(err: unknown, variables: VariableInput[] | undef
   );
 }
 
+/**
+ * Rows and columns of the query definition when BW's initial view leaves one of their
+ * characteristics in the free area (as it does for a characteristic that is also restricted
+ * by a variable in the filter); undefined when the initial view follows the definition.
+ */
+export function layoutCorrection(metaXml: string, layout: { rows: string[]; columns: string[] }): { rows: string[]; columns: string[] } | undefined {
+  const chars = parseMetaData(metaXml)?.characteristics ?? [];
+  const known = (n: string) => chars.some((c) => c.name.toUpperCase() === n.toUpperCase());
+  const moved = chars.some((c) => c.axis === 'FREE' && c.isStructure !== 'true' && [...layout.rows, ...layout.columns].some((n) => n.toUpperCase() === c.name.toUpperCase()));
+  if (!moved) return undefined;
+  return { rows: layout.rows.filter(known), columns: layout.columns.filter(known) };
+}
+
+async function definedLayout(client: BwClient, name: string, metaXml: string): Promise<{ rows: string[]; columns: string[] } | undefined> {
+  if (!(parseMetaData(metaXml)?.characteristics ?? []).some((c) => c.axis === 'FREE' && c.isStructure !== 'true')) return undefined;
+  const layout = await queryLayout(client, name).catch(() => undefined);
+  return layout && layoutCorrection(metaXml, layout);
+}
+
 async function queryData(client: BwClient, args: JsonObject): Promise<string> {
   const name = need(args, 'source', 'bw_data(action="query")').toUpperCase();
   // A query, else an InfoProvider read directly.
@@ -253,11 +279,15 @@ async function queryData(client: BwClient, args: JsonObject): Promise<string> {
     ...list(args['collapse']).map((node) => ({ node, collapse: true })),
     ...list(args['expand']).map((node) => ({ node, collapse: false })),
   ];
-  const asked = drills.length > 0 || ['rows', 'columns', 'filter'].some((k) => Array.isArray(args[k]) && (args[k] as unknown[]).length > 0) || (args['variables'] && Object.keys(args['variables'] as Rec).length > 0);
+  const given = (k: string) => Array.isArray(args[k]) && (args[k] as unknown[]).length > 0;
+  let asked = drills.length > 0 || ['rows', 'columns', 'filter'].some(given) || !!(args['variables'] && Object.keys(args['variables'] as Rec).length > 0);
   const words = (text: string) => text.replace(/from_row=(\d+)/g, 'offset=$1').replace(/bw_get_filter_values/g, 'bw_data(action="values")');
-  if (!asked) return words(await bwQueryData(client, name, !isQuery, 'text', undefined, undefined, offset, offset + max, undefined, stats));
+  if (!asked && !isQuery) return words(await bwQueryData(client, name, !isQuery, 'text', undefined, undefined, offset, offset + max, undefined, stats));
   const meta = await bwQueryData(client, name, !isQuery, 'raw', undefined, undefined, 0, 1);
-  const { state, variables } = buildState(meta, args);
+  const layoutArgs = isQuery && !given('rows') && !given('columns') ? await definedLayout(client, name, meta) : undefined;
+  if (layoutArgs) asked = true;
+  if (!asked) return words(await bwQueryData(client, name, !isQuery, 'text', undefined, undefined, offset, offset + max, undefined, stats));
+  const { state, variables } = buildState(meta, { ...args, ...layoutArgs });
   if (variables) await datesToExternal(variables, iobjDataType, () => dateFormatOf(client));
   try {
     // Each drill step is found in the result of the steps before it: a collapsed node moves
@@ -345,11 +375,46 @@ export function runAnswer(text: string, next?: string): string {
     return text;
   }
   if (r === null || typeof r !== 'object' || Array.isArray(r)) return text;
-  if (r['success'] === false) throw new ToolError('backend', legacyRefusal(r));
+  if (r['success'] === false) throw new ToolError('backend', legacyRefusal(r), typeof r['next_step'] === 'string' ? r['next_step'] : undefined);
   const parts = [typeof r['message'] === 'string' ? r['message'] : 'Done.'];
   if (typeof r['next_step'] === 'string') parts.push(r['next_step']);
   else if (next) parts.push(next);
   return parts.join(' ');
+}
+
+/** The answer of the BW/4HANA "delete data" service. */
+interface DeleteDataResult {
+  success?: boolean;
+  messages?: { type?: string; message?: string; text?: string; msgty?: string }[];
+}
+
+/**
+ * All data of a DataStore object, as "Delete all data" in the administration: the active
+ * table, the inbound table and the change log, with every request. BW runs it as a job and
+ * answers when the job has finished.
+ */
+async function deleteAdsoData(client: BwClient, name: string): Promise<string> {
+  const csrf = await client.getCsrfToken();
+  const res = await client.rawPost(
+    `/sap/bc/http/sap/bw4/v1/manage/datastores/${encodeURIComponent(name)}/deletedata`,
+    JSON.stringify({ operation: 1, deleteArchive: false, jobName: `COBWEB_DELDATA_${name}`.slice(0, 32) }),
+    {
+      'Content-Type': 'application/vnd.sap.bw4.manage.deletedata+json;version=1.0.0',
+      Accept: 'application/vnd.sap.bw4.manage.deletedata+json;version=1.0.0, application/json, */*',
+      'x-csrf-token': csrf,
+    },
+  );
+  let r: DeleteDataResult = {};
+  try {
+    r = JSON.parse(res.body || '{}') as DeleteDataResult;
+  } catch {
+    /* no JSON body */
+  }
+  const texts = (r.messages ?? []).map((m) => m.message ?? m.text ?? '').filter(Boolean);
+  if (r.success === false) {
+    throw new ToolError('backend', `Deleting the data of ${name} failed${texts.length ? `: ${texts.join(' / ')}` : '.'}`, 'bw_monitor(what="requests") shows the requests of the ADSO.');
+  }
+  return `Deleted all data of ADSO ${name}: active table, inbound table and change log are empty, its requests are gone.${texts.length ? ` Messages: ${texts.join(' / ')}` : ''} Loads into it (DTPs, deltas from its sources) work as before; a delta from this ADSO to its targets starts anew.`;
 }
 
 export async function bwRun(args: JsonObject, ctx: HandlerContext): Promise<string> {
@@ -372,7 +437,23 @@ export async function bwRun(args: JsonObject, ctx: HandlerContext): Promise<stri
       if (!isBwType(type)) throw new ToolError('validation', `target_type ${type} is not a coBWeb type.`);
       await inBounds(ctx, client, type, name);
       if (!id && args['all_requests'] !== true) throw new ToolError('validation', 'delete_request needs id (the request TSN) or all_requests=true.');
-      return runAnswer(await bwDeleteRequest(client, id, str(args['storage']) ?? 'AQ', name, type, args['all_requests'] === true));
+      try {
+        return runAnswer(await bwDeleteRequest(client, id, str(args['storage']) ?? 'AQ', name, type, args['all_requests'] === true));
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        if (type === 'ADSO' && /cannot be rolled back/i.test(msg)) {
+          throw new ToolError(
+            'validation',
+            `${name}: an activated request cannot be rolled back here (the ADSO keeps no change log).`,
+            `To empty the ADSO, use bw_run(action="delete_data", name="${name}"): it deletes all data like "Delete all data" in the administration.`,
+          );
+        }
+        throw err;
+      }
+    }
+    case 'delete_data': {
+      await inBounds(ctx, client, 'ADSO', name);
+      return deleteAdsoData(client, name);
     }
     case 'run_remodeling': {
       const mode = (str(args['mode']) ?? 'execute') as RemodelingAction;

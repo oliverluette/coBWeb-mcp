@@ -318,9 +318,9 @@ export const CATALOG: readonly ToolSpec[] = [
     name: 'bw_run',
     title: 'Run loads and runtime actions',
     description:
-      'Runtime actions that change data: run_dtp, start_chain (wait_seconds up to 600), activate_request and delete_request (id = request TSN, name = target), run_remodeling (name = provider, id = rule, mode), push_data (records into a write-interface ADSO). Check the result with bw_monitor. Only where the administrator allows runtime actions.',
+      'Runtime actions that change data: run_dtp, start_chain (wait_seconds up to 600), activate_request and delete_request (id = request TSN, name = target), delete_data (all data of an ADSO), run_remodeling (name = provider, id = rule, mode), push_data (records into a write-interface ADSO). Check the result with bw_monitor. Only where the administrator allows runtime actions.',
     actionParam: 'action',
-    actions: ['run_dtp', 'start_chain', 'activate_request', 'delete_request', 'run_remodeling', 'push_data'],
+    actions: ['run_dtp', 'start_chain', 'activate_request', 'delete_request', 'delete_data', 'run_remodeling', 'push_data'],
     types: [],
     destructive: true,
     idempotent: false,

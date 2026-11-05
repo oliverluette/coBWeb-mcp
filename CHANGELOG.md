@@ -2,6 +2,34 @@
 
 All notable changes to coBWeb. Versions follow [Semantic Versioning](https://semver.org/).
 
+## 1.3.0 – 2026-11-05
+
+### Added
+
+- **DTPs on parts of an InfoObject:** `part` (`attributes`, `texts`, `hierarchy`) in `source`
+  and `target` of a DTP, as for transformations. `bw_read` shows the part of both ends.
+- **Overwrite with the same key:** `overwrite_same_key` for DTPs into the attributes or texts of
+  an InfoObject (records with the same key in one data package overwrite each other). A new
+  master data DTP has it switched on unless the spec says `false`; other targets refuse the
+  field. An update changes only this setting. `bw_read` shows it.
+- **Delete all data of an ADSO:** `bw_run(action="delete_data", name)` empties the active
+  table, the inbound table and the change log, also for DataStore objects without a change
+  log, with the usual InfoArea and package checks. Later delta loads work as before.
+
+### Changed
+
+- `run_dtp`: a start that creates no request (request id of zeros) is an error with BW's
+  messages, no longer a success. An erroneous request that blocks the start is named. The
+  session of the start is ended after the call.
+- `delete_request`: the answer counts the requests that are actually gone; requests BW keeps
+  are listed as still present. A request that cannot be rolled back points to `delete_data`.
+- `bw_data`: the result follows the rows and columns of the query definition, also for a
+  characteristic restricted by a variable. With `rows` or `columns`, the key figure structure
+  stays in the result and the characteristics appear in the given order. Background filters
+  show both ends of an interval.
+- `bw_context`: `direction` follows the data: `up` lists sources, `down` targets. InfoObject
+  parts (texts, attributes) are labelled.
+
 ## 1.2.0 – 2026-11-05
 
 ### Added

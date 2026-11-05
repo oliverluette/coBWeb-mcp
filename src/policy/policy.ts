@@ -33,6 +33,7 @@ export const POLICY: Readonly<Record<string, OpClass>> = {
   'bw_run.start_chain': 'execute',
   'bw_run.activate_request': 'execute',
   'bw_run.delete_request': 'execute',
+  'bw_run.delete_data': 'execute',
   'bw_run.run_remodeling': 'execute',
   'bw_run.push_data': 'execute',
   'bw_transport.list': 'read',

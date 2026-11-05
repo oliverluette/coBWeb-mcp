@@ -720,17 +720,45 @@ export async function bwDeleteRequest(
     }
   }
 
+  // coBWeb: BW reports a request as deleted that it keeps, e.g. one a delta has already passed on.
+  // The answer counts what is actually gone, after the asynchronous deletion had a moment.
+  const kept = target ? await stillPresent(client, target, targetType, deleted.filter((d) => d.request).map((d) => ({ tsn: d.request!, storage: d.storage ?? storage.toUpperCase() }))) : [];
+  const keptKeys = new Set(kept.map((r) => `${r.tsn}/${r.storage}`));
+  const gone = deleted.filter((d) => !keptKeys.has(`${d.request}/${d.storage ?? storage.toUpperCase()}`));
+  if (kept.length > 0) {
+    notes.push(
+      `BW accepted the deletion of ${kept.length} request(s) that are still present: ` +
+      kept.map((r) => `${r.tsn} (${r.storage})`).join(', ') +
+      '. A request whose data a delta has already passed on stays; bw_run(action="delete_data") empties the whole DataStore object.',
+    );
+  }
+
   return JSON.stringify({
-    success: failed.length === 0,
+    success: failed.length === 0 && kept.length === 0,
     target: target ? target.toUpperCase() : undefined,
     rolled_back_requests: rolledBack.map((r) => ({ request: r.tsn, storage: r.storage })),
-    deleted_requests: deleted,
+    deleted_requests: gone,
+    still_present_requests: kept.length > 0 ? kept.map((r) => ({ request: r.tsn, storage: r.storage })) : undefined,
     failed_requests: failed,
     notes: notes.length > 0 ? notes : undefined,
     message:
-      `Deletion started: ${rolledBack.length} activation request(s) rolled back, ` +
-      `${deleted.length} request(s) deleted` +
+      `${rolledBack.length} activation request(s) rolled back, ` +
+      `${gone.length} request(s) deleted` +
+      (kept.length > 0 ? `, ${kept.length} still present` : '') +
       (failed.length > 0 ? `, ${failed.length} failed` : '') +
-      '. BW runs the deletion asynchronously; confirm with bw_monitor(what="requests").',
+      (target ? '.' : '. BW runs the deletion asynchronously; confirm with bw_monitor(what="requests").'),
   });
+}
+
+/** The given requests that the target still holds, after waiting up to ten seconds for them to go. */
+async function stillPresent(client: BwClient, target: string, targetType: string, refs: RequestRef[]): Promise<RequestRef[]> {
+  if (refs.length === 0) return [];
+  const wanted = new Set(refs.map((r) => `${r.tsn}/${r.storage}`));
+  let present: RequestRef[] = [];
+  for (let i = 0; i < 5; i++) {
+    if (i > 0) await new Promise((r) => setTimeout(r, 2000));
+    present = (await listRequestRefs(client, target, targetType, 200)).filter((r) => wanted.has(`${r.tsn}/${r.storage}`));
+    if (present.length === 0) break;
+  }
+  return present;
 }

@@ -2,7 +2,7 @@
  * Data transfer process (DTPA): read.
  */
 import { MEDIA_TYPES, bwSeg, freshRead, type BwClient } from '../bw/client.js';
-import { bwCreateDtp, bwSetDtpFilterRoutine, bwUpdateDtp, parseDtpXml, type DtpFilterSelectionInput, type DtpInfo } from '../legacy/dtp.js';
+import { bwCreateDtp, bwSetDtpFilterRoutine, bwUpdateDtp, handlesDuplicates, parseDtpXml, type DtpFilterSelectionInput, type DtpInfo } from '../legacy/dtp.js';
 import { bwDelete } from '../legacy/delete.js';
 import type { JsonObject } from '../catalog/tools.js';
 import { ToolError } from '../format/errors.js';
@@ -25,11 +25,21 @@ import { attr, endLabel, flowEnd, flowIdentity, objectStatus, parseIdentity, sam
 import { findTrfn } from './trfn.js';
 import { answer, numberOrNull, objectRef, statusFields } from '../format/structured.js';
 
-/** Source or target of a DTP: the `tlogo` attribute holds the object type (type says DTASRC). */
-function dtpEnd(xml: string, element: 'source' | 'target'): { type: string; name: string; sourceSystem?: string } {
+/** The part of an InfoObject a DTP reads or loads, from the type of its end (IOBJA, IOBJT, IOBJH). */
+const IOBJ_TYPE_PART: Record<string, string> = { IOBJA: 'attributes', IOBJT: 'texts', IOBJH: 'hierarchy' };
+const PART_SUBTYPE: Record<string, string> = { attributes: 'ATTR', texts: 'TEXT', hierarchy: 'HIER' };
+
+/** A DTP into the attributes or texts of an InfoObject: master data, where one key can repeat. */
+export function isMasterDataTarget(t: FlowEnd): boolean {
+  return t.type === 'IOBJ' && (t.part ?? 'attributes') !== 'hierarchy';
+}
+
+/** Source or target of a DTP: the `tlogo` attribute holds the object type (type says DTASRC, IOBJT …). */
+function dtpEnd(xml: string, element: 'source' | 'target'): FlowEnd {
   const tag = startTag(xml, element);
   const type = (attr(tag, 'tlogo') || attr(tag, 'type') || '?').toUpperCase();
-  return { type, ...splitDataSource(type, attr(tag, 'name') ?? '') };
+  const part = type === 'IOBJ' ? IOBJ_TYPE_PART[(attr(tag, 'type') ?? '').toUpperCase()] : undefined;
+  return { type, ...splitDataSource(type, attr(tag, 'name') ?? ''), ...(part ? { part } : {}) };
 }
 
 export function summarizeDtp(name: string, xml: string, info: DtpInfo, part?: string): string {
@@ -38,7 +48,7 @@ export function summarizeDtp(name: string, xml: string, info: DtpInfo, part?: st
   const mode = info.extractionMode === 'F' ? 'full' : info.extractionMode === 'D' ? 'delta' : info.extractionMode || '?';
   const head = [
     `DTPA ${name.toUpperCase()} "${xmlDecode(info.description)}" · ${statusText(objectStatus(xml, info.status))} · ${mode}${info.packageSize ? ` · package size ${info.packageSize}` : ''}`,
-    `${endLabel(src.type, src.name, src.sourceSystem)} → ${endLabel(tgt.type, tgt.name)}${info.transformation.name ? ` via TRFN ${info.transformation.name}` : ''}`,
+    `${endLabel(src.type, src.name, src.sourceSystem)}${src.part ? ` (${src.part})` : ''} → ${endLabel(tgt.type, tgt.name)}${tgt.part ? ` (${tgt.part})` : ''}${info.transformation.name ? ` via TRFN ${info.transformation.name}` : ''}`,
   ];
   const filter: string[] = [];
   const open: string[] = [];
@@ -56,6 +66,7 @@ export function summarizeDtp(name: string, xml: string, info: DtpInfo, part?: st
   const group = info.semanticGroupFields.filter((f) => f.isKey).map((f) => f.name);
   if (part?.toLowerCase() === 'filter') return [...head, ...filterLines].join('\n');
   const lines = [...head, ...filterLines, `Semantic group: ${group.join(', ') || 'none'}`];
+  if (isMasterDataTarget(tgt)) lines.push(`Overwrite records with the same key in a data package: ${handlesDuplicates(xml) ? 'yes' : 'no'}`);
   if (info.globalRoutineCode.length > 0) lines.push(`Global routine code: ${info.globalRoutineCode.length} lines`);
   return lines.join('\n');
 }
@@ -72,8 +83,8 @@ export function dtpData(name: string, xml: string, info: DtpInfo) {
     mode: raw === 'F' ? 'full' : raw === 'D' ? 'delta' : 'other',
     mode_raw: raw,
     package_size: numberOrNull(info.packageSize),
-    source: objectRef(src.type, src.name, src.sourceSystem).ref,
-    target: objectRef(tgt.type, tgt.name, tgt.sourceSystem).ref,
+    source: objectRef(src.type, src.name, src.sourceSystem, src.part).ref,
+    target: objectRef(tgt.type, tgt.name, tgt.sourceSystem, tgt.part).ref,
     transformation: info.transformation.name ? objectRef('TRFN', info.transformation.name).ref : null,
     filter: info.filterFields
       .filter((f) => f.selections.length > 0 || f.hasRoutine)
@@ -91,6 +102,7 @@ export function dtpData(name: string, xml: string, info: DtpInfo) {
     selectable_without_value: info.filterFields.filter((f) => f.selections.length === 0 && !f.hasRoutine && f.selected).map((f) => f.name),
     semantic_group: info.semanticGroupFields.filter((f) => f.isKey).map((f) => f.name),
     global_routine_lines: info.globalRoutineCode.length,
+    overwrite_same_key: isMasterDataTarget(tgt) ? handlesDuplicates(xml) : null,
   };
 }
 
@@ -123,7 +135,13 @@ export const dtpaReader: ObjectReader = {
 
 const END: JsonObject = {
   type: 'object',
-  properties: { type: { type: 'string' }, name: { type: 'string' }, source_system: { type: 'string' } },
+  properties: {
+    type: { type: 'string' },
+    name: { type: 'string' },
+    source_system: { type: 'string' },
+    // InfoObject part: the text table, the attributes or the hierarchy of a characteristic.
+    part: { type: 'string', enum: ['texts', 'attributes', 'hierarchy'] },
+  },
   required: ['type', 'name'],
   additionalProperties: false,
 };
@@ -173,6 +191,7 @@ const CREATE: JsonObject = {
     mode: { type: 'string', enum: ['full', 'delta'] },
     filter: FILTER,
     semantic_group: GROUP,
+    overwrite_same_key: { type: 'boolean' },
   },
   required: ['source', 'target'],
   additionalProperties: false,
@@ -184,6 +203,7 @@ const UPDATE: JsonObject = {
     mode: { type: 'string', enum: ['full', 'delta'] },
     filter: FILTER,
     semantic_group: GROUP,
+    overwrite_same_key: { type: 'boolean' },
     filter_routine: {
       type: 'object',
       properties: { field: { type: 'string' }, code: { type: 'string' }, global_code: { type: 'string' } },
@@ -250,7 +270,8 @@ function ends(xml: string): { source: FlowEnd; target: FlowEnd } {
   return { source: dtpEnd(xml, 'source'), target: dtpEnd(xml, 'target') };
 }
 
-const sameEnd = (a: FlowEnd, b: FlowEnd) => a.type === b.type && a.name === b.name && (a.type !== 'RSDS' || a.sourceSystem === b.sourceSystem);
+const sameEnd = (a: FlowEnd, b: FlowEnd) =>
+  a.type === b.type && a.name === b.name && (a.type !== 'RSDS' || a.sourceSystem === b.sourceSystem) && (a.type !== 'IOBJ' || (a.part ?? 'attributes') === (b.part ?? 'attributes'));
 
 /** The transformations a DTP from source to target runs through: one, or two via an InfoSource. */
 /**
@@ -482,7 +503,9 @@ export const dtpaAdapter: ObjectAdapter = {
             'DTPA create spec (omit name: BW generates it; the result line reports it)',
             '  source       {type, name, source_system}   ADSO | HCPR | RSDS | TRCS | IOBJ  (required)',
             '               source_system only for RSDS',
-            '  target       {type, name}                                                (required)',
+            '  target       {type, name, part}                                          (required)',
+            '               part for an InfoObject (source or target): texts | attributes (default) | hierarchy,',
+            '               the same as in the transformation',
             '  description  text, max 60',
             '  mode         full | delta (BW default when omitted)',
             '  filter       list per source field, either',
@@ -493,6 +516,9 @@ export const dtpaAdapter: ObjectAdapter = {
             '               dates as YYYYMMDD (e.g. 20261231), times as HHMMSS; the server writes them',
             '               in the user\'s format and checks that BW kept them',
             '  semantic_group  source fields that form the semantic group',
+            '  overwrite_same_key  true | false: records with the same key in one data package overwrite',
+            '               each other (the last one wins) instead of failing the load. Only for a target',
+            '               IOBJ with part attributes or texts; there the default is true.',
             'The transformation from source to target must exist (or be created in the same call);',
             'a chain through one InfoSource is found as well. A create for source and target that',
             'already have a DTP updates that DTP instead. The DTP is activated in the same call.',
@@ -506,6 +532,7 @@ export const dtpaAdapter: ObjectAdapter = {
             '  mode         full | delta',
             '  filter       as in create; the list of a field replaces its filter, values [] clears it',
             '  semantic_group  complete list of fields; [] removes the semantic group',
+            '  overwrite_same_key  true | false (DTPs into attributes or texts of an InfoObject)',
             '  filter_routine  {field, code, global_code}: ABAP filter routine of one source field;',
             '               code = the routine body (no FORM/ENDFORM), global_code = global declarations.',
             '               Generated, activated and attached in the same call.',
@@ -526,6 +553,10 @@ export const dtpaAdapter: ObjectAdapter = {
       const src = flowEnd(s.source);
       if (src.type === 'RSDS' && !src.sourceSystem) errors.push('source.source_system: required for a DataSource');
       if (src.type !== 'RSDS' && src.sourceSystem) errors.push('source.source_system: only for a DataSource');
+      const tgt = flowEnd(s.target);
+      if (src.part && src.type !== 'IOBJ') errors.push('source.part: only for an InfoObject');
+      if (tgt.part && tgt.type !== 'IOBJ') errors.push('target.part: only for an InfoObject');
+      if (s.overwrite_same_key !== undefined && !isMasterDataTarget(tgt)) errors.push('overwrite_same_key: only for a DTP into the attributes or texts of an InfoObject');
     }
     return errors;
   },
@@ -581,6 +612,7 @@ export const dtpaAdapter: ObjectAdapter = {
         source_system: src.sourceSystem,
         target_name: tgt.name,
         target_type: tgt.type,
+        ...(tgt.type === 'IOBJ' && tgt.part ? { target_object_subtype: PART_SUBTYPE[tgt.part] } : {}),
         description: typeof spec.description === 'string' ? spec.description : undefined,
         package: ctx.package,
       }),
@@ -592,12 +624,16 @@ export const dtpaAdapter: ObjectAdapter = {
     const created = await readDoc(name);
     const info = parseDtpXml(created.xml, created.status);
     notes.push(...(await filterChanges(ctx.client, name, filters, info, created.xml, ctx.transport)));
+    // Mode and the master data setting go in one update (each update saves and activates).
+    const settings: Parameters<typeof bwUpdateDtp>[1] = { dtp_name: name, transport: ctx.transport };
     if (spec.mode) {
-      if ((spec.mode === 'delta') !== (info.extractionMode === 'D')) {
-        await bwUpdateDtp(ctx.client, { dtp_name: name, extraction_mode: spec.mode as 'full' | 'delta', transport: ctx.transport });
-      }
+      if ((spec.mode === 'delta') !== (info.extractionMode === 'D')) settings.extraction_mode = spec.mode as 'full' | 'delta';
       notes.push(String(spec.mode));
     }
+    // Master data: one key can come several times in a package; overwrite by default.
+    const overwrite = isMasterDataTarget(tgt) ? spec.overwrite_same_key !== false : undefined;
+    if (overwrite !== undefined && overwrite !== handlesDuplicates(created.xml)) settings.handle_duplicate_records = overwrite;
+    if (settings.extraction_mode !== undefined || settings.handle_duplicate_records !== undefined) await bwUpdateDtp(ctx.client, settings);
     if (Array.isArray(spec.semantic_group)) {
       const group = (spec.semantic_group as unknown[]).map((g) => String(g).toUpperCase());
       const own = group.map((g) => dtpField(g, info.semanticGroupFields.map((f) => f.name)));
@@ -606,6 +642,12 @@ export const dtpaAdapter: ObjectAdapter = {
       notes.push(`semantic group ${group.join('+') || 'none'}`);
     }
     const { xml } = await readDoc(name);
+    if (overwrite !== undefined) {
+      if (overwrite !== handlesDuplicates(xml)) {
+        throw new ToolError('backend', `DTP ${name}: BW did not keep "overwrite records with the same key" = ${overwrite}.`, 'Set it with bw_write update overwrite_same_key, or in the DTP.');
+      }
+      notes.push(overwrite ? 'overwrites the same key in a package' : 'same key in a package not overwritten');
+    }
     const active = objectStatus(xml) === 'active';
     return active ? { status: 'created', name, activated: true, notes } : { status: 'created', name, activation: { lockHandle: '' }, notes };
   },
@@ -630,6 +672,15 @@ export const dtpaAdapter: ObjectAdapter = {
       if ([...own].sort().join(',') !== [...now].sort().join(',')) {
         args.semantic_group_fields = own.join(',');
         notes.push(`semantic group ${group.join('+') || 'none'}`);
+      }
+    }
+    if (typeof spec.overwrite_same_key === 'boolean') {
+      if (!isMasterDataTarget(dtpEnd(xml, 'target'))) {
+        throw new ToolError('validation', `${name}: overwrite_same_key applies to DTPs into the attributes or texts of an InfoObject only.`);
+      }
+      if (spec.overwrite_same_key !== handlesDuplicates(xml)) {
+        args.handle_duplicate_records = spec.overwrite_same_key;
+        notes.push(spec.overwrite_same_key ? 'overwrites the same key in a package' : 'same key in a package not overwritten');
       }
     }
     if (notes.length > 0) {

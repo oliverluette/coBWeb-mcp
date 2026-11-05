@@ -35,7 +35,7 @@ How an object is connected.
 | Parameter | Meaning |
 |---|---|
 | `relation` | `dataflow`: sources and targets with the transformations and DTPs between them; `where_used`: objects that reference it |
-| `direction` | `up`, `down` or `both` |
+| `direction` | `up` (sources), `down` (targets) or `both` |
 | `depth` | how many hops to follow |
 
 ## bw_describe
@@ -129,10 +129,11 @@ InfoAreas).
 
 | Action | Meaning |
 |---|---|
-| `run_dtp` | run a DTP (`name`) |
+| `run_dtp` | run a DTP (`name`); a start without a request is reported as an error |
 | `start_chain` | start a process chain once, now (`name`); `wait_seconds` up to 600 |
 | `activate_request` | activate a request of an ADSO (`name`, `id` = TSN) |
-| `delete_request` | delete a request (`id`) or every request (`all_requests`) of a target |
+| `delete_request` | delete a request (`id`) or every request (`all_requests`) of a target; the answer counts the requests that are actually gone |
+| `delete_data` | delete all data of an ADSO (`name`): active table, inbound table and change log |
 | `run_remodeling` | run a remodeling rule (`name` = provider, `id` = rule, `mode`) |
 | `push_data` | write records into an ADSO with write interface (`records: [{FIELD: value}]`) |
 
@@ -174,7 +175,7 @@ Every answer is an envelope `{"schema": "cobweb.<kind>/<version>", "data": …}`
 | `cobweb.system/1` | `bw_system` (profile) | release, platform, `cobweb_version`, safety settings as booleans |
 | `cobweb.hcpr/1` | `bw_read` HCPR | head, `composition`, `inputs` with mappings, `fields`, `joins` |
 | `cobweb.trfn/1` | `bw_read` TRFN | head, `runtime`, `source`, `target`, `routines` (class, method), `rules`, fields |
-| `cobweb.dtpa/1` | `bw_read` DTPA | head, `mode`/`mode_raw`, `source`, `target`, `transformation`, `filter`, `semantic_group` |
+| `cobweb.dtpa/1` | `bw_read` DTPA | head, `mode`/`mode_raw`, `source`, `target` (with `part` for an InfoObject), `transformation`, `filter`, `semantic_group`, `overwrite_same_key` |
 | `cobweb.object_head/1` | `bw_read` ADSO, IOBJ, RSDS, TRCS with `part="head"` (or `"keys"`) | `status`, `description`, `info_area`, `package`, `keys` |
 | `cobweb.unstructured/1` | any of the four | the call succeeded, but this type or option has text only (e.g. `detail="raw"`); `data` is `null` |
 | `cobweb.error/1` | any of the four | `isError`; `data` = `{kind, message, hint}` |

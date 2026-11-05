@@ -948,15 +948,35 @@ export async function bwRunDtp(dtpName: string): Promise<string> {
   const csrfToken = await runClient.getCsrfToken();
 
   const body = `<?xml version="1.0" encoding="UTF-8"?><executeRun dataTransferProcess="${dtpUpper}"></executeRun>`;
-  const response = await runClient.rawPost(
-    '/sap/bw/modeling/dtpa/executerun',
-    body,
-    {
-      'Accept': MEDIA_TYPES['dtpa'],
-      'Content-Type': MEDIA_TYPES['dtpa'],
-      'x-csrf-token': csrfToken,
+  let response: { body: string; headers: Record<string, string> };
+  // coBWeb: the scheduler enqueues the DTP name in the calling session and leaves the release to
+  // the end of that session. A stateful session that lives on blocks every later start of the
+  // DTP (BW then answers with request 0 and no message), so the session is ended after the call.
+  try {
+    response = await runClient.rawPost(
+      '/sap/bw/modeling/dtpa/executerun',
+      body,
+      {
+        'Accept': MEDIA_TYPES['dtpa'],
+        'Content-Type': MEDIA_TYPES['dtpa'],
+        'x-csrf-token': csrfToken,
+      }
+    );
+  } catch (err) {
+    // coBWeb: BW answers 403 when the DTP has an erroneous request that blocks a new one.
+    if (/HTTP 403\b/.test(err instanceof Error ? err.message : String(err))) {
+      return JSON.stringify({
+        success: false,
+        message: `DTP ${dtpUpper} was not started: it has an erroneous request, which must be deleted (or repaired) before a new one can run.`,
+        next_step: 'List the requests of the target with bw_monitor(what="requests", name=<target>) and delete the red one with bw_run(action="delete_request").',
+      });
     }
-  );
+    throw err;
+  }
+
+  finally {
+    await runClient.logoff();
+  }
 
   const location = response.headers['location'] ?? response.headers['Location'] ?? '';
   if (!location) {
@@ -965,15 +985,36 @@ export async function bwRunDtp(dtpName: string): Promise<string> {
     );
   }
   const requestId = location.split('/').filter(Boolean).pop() ?? '';
+  // coBWeb: the server answers 201 even when no request was created; the request id is then
+  // all zeros and the body carries the error messages of the start.
+  const messages = runMessages(response.body);
+  if (!/[1-9]/.test(requestId)) {
+    return JSON.stringify({
+      success: false,
+      message: `DTP ${dtpUpper} was not started; BW created no request${messages.length ? `: ${messages.join(' / ')}` : '.'}`,
+      next_step:
+        (messages.length
+          ? 'Fix the cause and run the DTP again; bw_monitor(what="requests", name=<target>) shows the requests of the target.'
+          : 'A delta DTP whose source has no new requests creates no request (all source requests were transferred already); check bw_monitor(what="requests", name=<source>). Otherwise check that the DTP is active; a process chain shows the full log.') +
+        ' BW may also have queued the run for the logon user and start it later, when its task queue picks it up: check bw_monitor(what="requests", name=<target>) before starting it again. A process chain (bw_run(action="start_chain")) runs the DTP under the background user and starts at once.',
+    });
+  }
 
   return JSON.stringify({
     success: true,
     dtp_name: dtpUpper,
     request_id: requestId,
     message:
-      `DTP run started for ${dtpUpper} (request id ${requestId}). ` +
+      `DTP run started for ${dtpUpper} (request ${requestId})${messages.length ? `; messages: ${messages.join(' / ')}` : ''}. ` +
       `Follow the load with bw_monitor(what="requests", name=<target>) and bw_monitor(what="request", id).`,
   });
+}
+
+/** coBWeb: the message titles of the atom feed an executerun answers with. */
+export function runMessages(body: string): string[] {
+  return [...(body ?? '').matchAll(/<atom:entry\b[\s\S]*?<atom:title[^>]*>([^<]*)<\/atom:title>/g)]
+    .map((m) => decodeXmlEntities(m[1]).trim())
+    .filter(Boolean);
 }
 
 // ── bwUpdateDtp ───────────────────────────────────────────────────────────────
@@ -988,8 +1029,40 @@ export interface UpdateDtpArgs {
   filter_clear_fields?: string;
   extraction_mode?: 'full' | 'delta';
   semantic_group_fields?: string;
+  /** coBWeb: master data target: overwrite records with the same key within a data package. */
+  handle_duplicate_records?: boolean;
   transport?: string;
   transport_lock_holder?: string;
+}
+
+/**
+ * coBWeb: the update setting of a DTP into the attributes or texts of an InfoObject that lets a
+ * data package carry several records with the same key, the last one winning (DTP option
+ * "handle duplicate record keys"; admissible attribute IOBJ_HANDLE_DUPREC). It lives in the
+ * master data element of the target, which the server leaves out while nothing is set.
+ */
+export function setHandleDuplicates(xml: string, on: boolean): string {
+  const attr = `handleDuplicateRecords="${on}"`;
+  const target = xml.match(/<target\b[^>]*?(\/>|>[\s\S]*?<\/target>)/)?.[0];
+  if (!target) throw new Error('The DTP document has no target element.');
+  let next: string;
+  if (/<infoObjectMasterData\b/.test(target)) {
+    next = target.replace(/<infoObjectMasterData\b([^>]*?)(\/?)>/, (_m, a: string, close: string) => {
+      const rest = a.replace(/\s+handleDuplicateRecords="[^"]*"/, '');
+      return `<infoObjectMasterData${rest} ${attr}${close}>`;
+    });
+  } else if (target.endsWith('/>')) {
+    next = `${target.slice(0, -2)}><infoObjectMasterData ${attr}/></target>`;
+  } else {
+    next = target.replace(/<\/target>$/, `<infoObjectMasterData ${attr}/></target>`);
+  }
+  return xml.replace(target, next);
+}
+
+/** coBWeb: whether the DTP overwrites records with the same key within a data package. */
+export function handlesDuplicates(xml: string): boolean {
+  const target = xml.match(/<target\b[^>]*?(\/>|>[\s\S]*?<\/target>)/)?.[0] ?? '';
+  return /<infoObjectMasterData\b[^>]*\bhandleDuplicateRecords="true"/.test(target);
 }
 
 /**
@@ -1107,6 +1180,9 @@ export async function bwUpdateDtp(
 
     if (args.semantic_group_fields !== undefined) {
       putXml = applySemanticGroup(putXml, args.semantic_group_fields, dtpName);
+    }
+    if (args.handle_duplicate_records !== undefined) {
+      putXml = setHandleDuplicates(putXml, args.handle_duplicate_records);
     }
 
     // PUT on a fresh stateless client — Eclipse uses a separate stateless session for PUT

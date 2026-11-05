@@ -52,7 +52,9 @@ export function parseDataflow(xml: string): FlowNode[] {
   return nodes;
 }
 
-const label = (n: { type: string; name: string; sourceSystem?: string }) => `${n.type} ${n.name}${n.sourceSystem ? ` (${n.sourceSystem})` : ''}`;
+const PART_LABEL: Record<string, string> = { ATTR: 'attributes', TEXT: 'texts', HIER: 'hierarchy' };
+const label = (n: { type: string; name: string; sourceSystem?: string; subType?: string }) =>
+  `${n.type} ${n.name}${n.sourceSystem ? ` (${n.sourceSystem})` : ''}${n.type === 'IOBJ' && n.subType && PART_LABEL[n.subType] ? ` (${PART_LABEL[n.subType]})` : ''}`;
 const ORDER = ['LSYS', 'RSDS', 'TRCS', 'IOBJ', 'ADSO', 'HCPR', 'ELEM', 'QUERY'];
 
 /** Objects (everything but transformations and DTPs) in the order of the text. */
@@ -175,8 +177,10 @@ function objectParam(type: string, name: string, sourceSystem?: string): string 
 export async function dataflow(client: BwLike, type: string, name: string, sourceSystem: string | undefined, direction: string, depth: number, rootType = type): Promise<Structured> {
   const obj = objectParam(type, name, sourceSystem);
   const params = [`objecttype=${type}`, `objectname=${type === 'RSDS' ? obj.replace(/ /g, '+') : encodeURIComponent(obj)}`];
-  if (direction !== 'down') params.push(`levelupwards=${depth}`);
-  if (direction !== 'up') params.push(`leveldownwards=${depth}`);
+  // The modeler counts its levels against the data direction: leveldownwards follows the
+  // sources of an object, levelupwards its targets.
+  if (direction !== 'down') params.push(`leveldownwards=${depth}`);
+  if (direction !== 'up') params.push(`levelupwards=${depth}`);
   const { body } = await client.get(`/sap/bw/modeling/dmod/8TRANSIENT?${params.join('&')}`, DMOD_ACCEPT);
   const nodes = parseDataflow(body);
   const dir = direction === 'both' ? 'up and down' : direction;

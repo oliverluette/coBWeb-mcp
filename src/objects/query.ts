@@ -26,6 +26,14 @@ async function readDoc(client: BwClient, name: string): Promise<{ xml: string; v
   }
 }
 
+/** The characteristics in rows and columns of the query definition, in their order. */
+export async function queryLayout(client: BwClient, name: string): Promise<{ rows: string[]; columns: string[] }> {
+  const { xml, version } = await readDoc(client, name);
+  const q = parseQuery(name, xml, version);
+  const chars = (axis: unknown) => ((axis as Rec[] | undefined) ?? []).filter((d) => d['type'] === 'Dimension' && d['infoObjectName']).map((d) => String(d['infoObjectName']));
+  return { rows: chars(q['rows']), columns: chars(q['columns']) };
+}
+
 export function parseQuery(name: string, xml: string, version: 'a' | 'm' = 'a'): Rec {
   return parseQueryDocument(xml, name, version === 'm' ? 'inactive version returned' : undefined);
 }
