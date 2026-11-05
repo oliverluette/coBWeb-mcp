@@ -47,6 +47,54 @@ import {
   type WriteAction,
 } from './adapter.js';
 import { isHeadPart, objectHead, objectRef } from '../format/structured.js';
+import { bwMoveObject } from '../legacy/infoarea.js';
+
+/**
+ * What each preset allows, determined on a BW/4HANA 2.0 system: a key is required where
+ * "Activate/Compress Data" is set without "All characteristics are key", not allowed for an
+ * inbound-only staging ADSO and a data mart ADSO, optional with direct update. Only the presets
+ * a query can read are PartProviders of a CompositeProvider.
+ */
+export const PRESET_RULES: Record<string, { key: 'required' | 'forbidden' | 'optional'; partProvider: boolean }> = {
+  standard: { key: 'required', partProvider: true },
+  staging_inbound_only: { key: 'forbidden', partProvider: false },
+  staging_compress: { key: 'required', partProvider: false },
+  staging_reporting: { key: 'required', partProvider: true },
+  datamart: { key: 'forbidden', partProvider: true },
+  direct_update: { key: 'optional', partProvider: true },
+};
+
+const ALTERNATIVE_KEYED = 'standard, staging_compress, staging_reporting or direct_update';
+const PART_PROVIDER_PRESETS = Object.keys(PRESET_RULES).filter((p) => PRESET_RULES[p].partProvider);
+
+/** The problem of a preset with a key list, or undefined. */
+export function keyProblem(preset: string, keys: string[]): string | undefined {
+  const rule = PRESET_RULES[preset];
+  if (!rule) return undefined;
+  if (rule.key === 'forbidden' && keys.length > 0) {
+    return `keys: an ADSO with preset ${preset} cannot have a key (${preset === 'datamart' ? 'all characteristics are key' : '"Activate/Compress Data" is not set'}); leave keys out or use preset ${ALTERNATIVE_KEYED}`;
+  }
+  if (rule.key === 'required' && keys.length === 0) {
+    return `keys: an ADSO with preset ${preset} needs a key; give keys, or use preset direct_update, datamart or staging_inbound_only for an ADSO without key`;
+  }
+  return undefined;
+}
+
+/** Why an ADSO with these presets cannot be an input of a CompositeProvider, or undefined. */
+export function partProviderProblem(name: string, presets: string[]): string | undefined {
+  if (presets.length === 0 || presets.some((p) => PRESET_RULES[p]?.partProvider !== false)) return undefined;
+  return `ADSO ${name} (preset ${presets.join(' or ')}) cannot be an input of a CompositeProvider; use an ADSO with preset ${PART_PROVIDER_PRESETS.join(', ')}`;
+}
+
+/** The presets of an existing ADSO, or undefined when it does not exist. */
+export async function adsoPresets(name: string): Promise<string[] | undefined> {
+  try {
+    return parseAdso(name, (await readDoc(name)).xml).presets;
+  } catch (err) {
+    if (isNotFound(err)) return undefined;
+    throw err;
+  }
+}
 
 const PRESETS = Object.keys(typePresets);
 const NAMES = { type: 'array', items: { type: 'string' } };
@@ -99,6 +147,7 @@ const UPDATE: JsonObject = {
     write_interface: { type: 'boolean' },
     field_properties: FIELD_PROPERTIES,
     settings: SETTINGS,
+    info_area: { type: 'string' },
   },
   additionalProperties: false,
 };
@@ -354,6 +403,14 @@ async function save(client: BwClient, name: string, xml: string, timestamp: stri
   return handle;
 }
 
+function presetLines(): string[] {
+  const key = (p: string) => ({ required: 'key required', forbidden: 'no key', optional: 'key optional' })[PRESET_RULES[p].key];
+  return [
+    '                   preset          key            input of a CompositeProvider',
+    ...Object.keys(PRESET_RULES).map((p) => `                   ${p.padEnd(21)}${key(p).padEnd(15)}${PRESET_RULES[p].partProvider ? 'yes' : 'no'}`),
+  ];
+}
+
 export const adsoAdapter: ObjectAdapter = {
   type: 'ADSO',
   label: 'DataStore object (advanced)',
@@ -379,6 +436,7 @@ export const adsoAdapter: ObjectAdapter = {
             '  copy_from        {type: ADSO | RSDS, name, source_system}: take fields, key and settings',
             '                   from a template; fields are then added to the proposed ones',
             `  preset           ${PRESETS.join(' | ')} (default standard)`,
+            ...presetLines(),
             '  write_interface  true | false (default false)',
             'group = a field group the ADSO declares (e.g. GROUP1). The ADSO is created with all fields',
             'and the key in one step. InfoObjects created in the',
@@ -394,6 +452,8 @@ export const adsoAdapter: ObjectAdapter = {
             '  fields_remove    fields to remove (instead of fields)',
             '  keys             complete key list',
             `  preset           ${PRESETS.join(' | ')}`,
+            ...presetLines(),
+            '  info_area        moves the ADSO to this InfoArea',
             '  write_interface  true | false',
             '  field_properties list of {field, label, group, aggregation, currency | unit | reference};',
             '                   aggregation only for fields without InfoObject',
@@ -423,7 +483,28 @@ export const adsoAdapter: ObjectAdapter = {
       for (const k of upper(s.keys)) if (!fields.includes(k)) errors.push(`keys: ${k} is not in fields`);
     }
     if (new Set(fields).size !== fields.length) errors.push('fields: duplicate names');
+    // Key rules of the preset, where the spec says both (a copy takes its key from the template).
+    const preset = typeof s.preset === 'string' ? s.preset : action === 'create' && !cf ? 'standard' : undefined;
+    if (preset && (s.keys !== undefined || (action === 'create' && !cf))) {
+      const p = keyProblem(preset, upper(s.keys));
+      if (p) errors.push(p);
+    }
     return errors;
+  },
+
+  async preflight(_client, action, name, spec) {
+    // An update that changes keys or preset without naming the other: check against the ADSO.
+    if (action !== 'update' || !spec || (spec.keys === undefined) === (spec.preset === undefined)) return [];
+    try {
+      const m = parseAdso(name, (await readDoc(name)).xml);
+      const presets = typeof spec.preset === 'string' ? [spec.preset] : m.presets;
+      const keys = spec.keys !== undefined ? upper(spec.keys) : m.keys;
+      const problems = presets.map((p) => keyProblem(p, keys));
+      return problems.every(Boolean) ? [problems[0]!] : [];
+    } catch (err) {
+      if (isNotFound(err)) return [];
+      throw err;
+    }
   },
 
   dependsOn(action, _name, spec) {
@@ -516,12 +597,15 @@ export const adsoAdapter: ObjectAdapter = {
   },
 
   async update(name, spec, ctx) {
-    const doc = await readDoc(name);
-    // A create of an existing ADSO arrives here with info_area; fine as long as it matches.
+    let doc = await readDoc(name);
+    // info_area moves the ADSO first; the document is read again for the other changes.
     const area = typeof spec.info_area === 'string' ? spec.info_area.toUpperCase() : undefined;
     const currentArea = locationFromXml(doc.xml).infoArea;
+    const moved: string[] = [];
     if (area && area !== currentArea) {
-      throw new ToolError('not_implemented', `${name.toUpperCase()} is in InfoArea ${currentArea}; moving it is not supported yet.`, 'Leave info_area out or give the current one.');
+      await bwMoveObject(ctx.client, { objectType: 'adso', objectName: name, targetInfoArea: area });
+      moved.push(`moved from InfoArea ${currentArea ?? '?'} to ${area}`);
+      doc = await readDoc(name);
     }
     const { xml, notes } = await applyDesired(name, doc.xml, {
       fields: spec.fields !== undefined ? entriesOf(spec.fields) : undefined,
@@ -534,9 +618,9 @@ export const adsoAdapter: ObjectAdapter = {
       preset: typeof spec.preset === 'string' ? spec.preset : undefined,
       writeInterface: typeof spec.write_interface === 'boolean' ? spec.write_interface : undefined,
     });
-    if (xml === doc.xml) return { status: 'unchanged' };
+    if (xml === doc.xml) return moved.length ? { status: 'changed', activated: locationFromXml(doc.xml).active !== false, notes: moved } : { status: 'unchanged' };
     const handle = await save(ctx.client, name, xml, doc.timestamp, ctx.transport);
-    return { status: 'changed', activation: { lockHandle: handle }, notes };
+    return { status: 'changed', activation: { lockHandle: handle }, notes: [...moved, ...notes] };
   },
 
   async delete(name, ctx) {

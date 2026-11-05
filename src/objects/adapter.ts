@@ -109,9 +109,34 @@ export interface ObjectAdapter extends ObjectReader {
    * to be activated returns activation: { lockHandle: '' }.
    */
   activate?(client: BwClient, name: string, transport?: string): Promise<{ ok: boolean; messages: string[]; deactivated: string[] }>;
+  /**
+   * Checks against BW that the spec alone cannot answer (a currency in TCURC, the type of an
+   * input provider), run by validate_only and before every write, so a problem BW would only
+   * report on activation leaves no inactive object behind. Returns the problems.
+   */
+  preflight?(client: BwClient, action: WriteAction, name: string, spec: Spec | undefined, call: CallView): Promise<string[]>;
   create(name: string, spec: Spec, ctx: WriteContext): Promise<WriteOutcome>;
   update(name: string, spec: Spec, ctx: WriteContext): Promise<WriteOutcome>;
   delete(name: string, ctx: WriteContext): Promise<WriteOutcome>;
+}
+
+/** The other objects of the same bw_write call, by type and name. */
+export interface CallView {
+  spec(type: BwType, name: string): { action: WriteAction; spec?: Spec } | undefined;
+}
+
+/**
+ * Whether a key exists in a customizing table (TCURC, T006), read through ADT DataPreview;
+ * undefined when the table cannot be read, so the check is skipped rather than guessed.
+ */
+export async function tableHas(client: BwClient, table: string, field: string, value: string): Promise<boolean | undefined> {
+  try {
+    const { queryTable } = await import('../legacy/metadata_sql.js');
+    const rows = await queryTable(client, `SELECT ${field} FROM ${table} WHERE ${field} = '${value.replace(/'/g, "''")}'`, 1);
+    return rows.length > 0;
+  } catch {
+    return undefined;
+  }
 }
 
 /** HTTP 404 from the BW client. */

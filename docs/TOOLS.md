@@ -53,7 +53,7 @@ Create, update or delete objects and activate them in the same call.
 | `package` | development package (default `$TMP`; must be allowed by `COBWEB_ALLOWED_PACKAGES`) |
 | `transport` | transport request, needed outside `$TMP` on systems with transport recording |
 | `activate` | activate after saving (default `true`) |
-| `validate_only` | check specs, names, limits and dependencies against BW without writing |
+| `validate_only` | check specs, names, limits and dependencies against BW without writing, including what BW would only refuse on activation: currencies (TCURC) and units (T006), the key rules of the ADSO presets, ADSOs that cannot be inputs of a CompositeProvider. The same checks run before every write, so such an object is not saved at all |
 
 The server sorts the objects by dependency, locks, saves, activates and unlocks; objects that
 depend on a failed one are skipped. A create of an object that exists becomes an update; an
@@ -98,7 +98,7 @@ For `query`:
 |---|---|
 | `rows`, `columns` | characteristics or structures by name; the others go to the free area. Without them the layout of the query applies. |
 | `filter` | per characteristic `{field, values}`, `{field, selections: [{op, low, high, exclude}]}` (`op`: `eq`, `ne`, `between`, `gt`, `ge`, `lt`, `le`) or `{field, nodes}` for text nodes of the display hierarchy; `exclude`, `internal` (values are internal keys) |
-| `variables` | `{NAME: "A"}`, `"A..B"` (interval) or `"A,B"` (list) |
+| `variables` | `{NAME: "A"}`, `"A..B"` (interval) or `"A,B"` (list); dates of a date characteristic as YYYYMMDD or YYYY-MM-DD are converted to the logon user's date format |
 | `collapse`, `expand` | hierarchy nodes to collapse or expand in the result, by key or text |
 | `offset`, `max_rows` | paging; the answer says whether more rows follow |
 | `with_statistics` | runtime and HANA statistics of the call |
@@ -143,7 +143,7 @@ InfoAreas).
 | `list` | changeable transport requests (`all_users`, `include_released`, `with_objects`) |
 | `create_task` | a task in a request for a user |
 | `assign` | assign objects to a package (and a transport request) |
-| `move` | move objects to another InfoArea |
+| `move` | move objects to another InfoArea (also `bw_write` update with `info_area` for IOBJ, ADSO, HCPR) |
 
 ## bw_system
 

@@ -498,7 +498,17 @@ function parseDimElement(
     description: ((elem['Qry:description'] as Record<string, unknown> | undefined)?.['@_value'] as string) ?? '',
   };
   if (infoObjectTypeKv) result.infoObjectType = infoObjectTypeKv['@_value'];
+  const vp = valuePresentationOf(elem);
+  if (vp) result.valuePresentation = vp;
   return result;
+}
+
+/** coBWeb: display and text type of a characteristic, when not the default. */
+export function valuePresentationOf(elem: Record<string, unknown> | undefined): { presentAs: string; textPresentation?: string } | undefined {
+  const vp = elem?.['Qry:valuePresentation'] as Record<string, unknown> | undefined;
+  if (!vp || vp['@_default'] === 'true' || vp['@_default'] === true || !vp['@_presentAs']) return undefined;
+  const text = vp['@_textPresentation'] as string | undefined;
+  return { presentAs: String(vp['@_presentAs']), ...(text && text !== 'standard' ? { textPresentation: text } : {}) };
 }
 
 export interface DimHierarchy {
@@ -1012,6 +1022,8 @@ export function parseQueryDocument(
       description: ((elem['Qry:description'] as Record<string, unknown> | undefined)?.['@_value'] as string) ?? '',
     };
     if (infoObjectTypeKv) result['infoObjectType'] = infoObjectTypeKv['@_value'];
+    const vp = valuePresentationOf(elem); // coBWeb
+    if (vp) result['valuePresentation'] = vp;
     return result;
   }).map(withHierarchy('Qry:free'));
 

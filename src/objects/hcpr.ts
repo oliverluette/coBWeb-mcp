@@ -38,6 +38,8 @@ import {
   type WriteAction,
 } from './adapter.js';
 import { answer, objectRef, statusFields } from '../format/structured.js';
+import { bwMoveObject } from '../legacy/infoarea.js';
+import { adsoPresets, partProviderProblem, PRESET_RULES } from './adso.js';
 
 const INPUT: JsonObject = {
   type: 'object',
@@ -405,7 +407,9 @@ export const hcprAdapter: ObjectAdapter = {
             '  view          union (default) | join',
             '  inputs        list of {provider, type, fields}               (required)',
             '    provider    InfoProvider name, e.g. an ADSO',
-            '    type        ADSO (default) | HCPR | IOBJ',
+            '    type        ADSO (default) | HCPR | IOBJ; an ADSO must be a PartProvider: preset',
+            `                ${Object.keys(PRESET_RULES).filter((p) => PRESET_RULES[p].partProvider).join(', ')}`,
+            '                (not staging_inbound_only, staging_compress)',
             '    fields      fields to take over; omit to map all fields 1:1',
             '  join          for view=join with exactly two inputs:',
             '    type        inner (default) | left_outer',
@@ -438,6 +442,7 @@ export const hcprAdapter: ObjectAdapter = {
             '  join            {type, on} as in create: replaces the join condition of a join',
             '  stackable       true | false',
             '  default_node    the node queries read (U1, J1, …; only providers with several nodes)',
+            '  info_area       moves the CompositeProvider to this InfoArea',
             'The view type cannot change.',
             'Example',
             '  {"action":"update","type":"HCPR","name":"ZSALESCP","spec":{"inputs_add":[{"provider":"ZSALES03"}]}}',
@@ -479,6 +484,25 @@ export const hcprAdapter: ObjectAdapter = {
 
   targetInfoArea(_name, spec) {
     return typeof spec.info_area === 'string' ? spec.info_area.toUpperCase() : undefined;
+  },
+
+  async preflight(_client, action, _name, spec, call) {
+    if (action === 'delete' || !spec) return [];
+    const problems: string[] = [];
+    for (const input of [...inputsOf(spec.inputs), ...inputsOf(spec.inputs_add)]) {
+      if (input.type !== 'ADSO') continue;
+      const other = call.spec('ADSO', input.provider);
+      const presets = other
+        ? typeof other.spec?.preset === 'string'
+          ? [other.spec.preset]
+          : other.action === 'create' && !other.spec?.copy_from
+            ? ['standard']
+            : await adsoPresets(input.provider)
+        : await adsoPresets(input.provider);
+      const p = partProviderProblem(input.provider, presets ?? []);
+      if (p) problems.push(p);
+    }
+    return problems;
   },
 
   async locate(_client, name) {
@@ -546,16 +570,20 @@ export const hcprAdapter: ObjectAdapter = {
   },
 
   async update(name, spec, ctx) {
-    const current = parseHcpr(name, await readXml(name));
+    let current = parseHcpr(name, await readXml(name));
+    // info_area moves the CompositeProvider first; the other changes work on the moved one.
     const area = typeof spec.info_area === 'string' ? spec.info_area.toUpperCase() : undefined;
+    const moved: string[] = [];
     if (area && area !== current.infoArea) {
-      throw new ToolError('not_implemented', `${name.toUpperCase()} is in InfoArea ${current.infoArea}; moving it is not supported yet.`, 'Leave info_area out or give the current one.');
+      await bwMoveObject(ctx.client, { objectType: 'hcpr', objectName: name, targetInfoArea: area });
+      moved.push(`moved from InfoArea ${current.infoArea ?? '?'} to ${area}`);
+      current = parseHcpr(name, await readXml(name));
     }
     if (spec.view !== undefined && spec.view !== current.view) {
       throw new ToolError('validation', `${name.toUpperCase()} is a ${current.view}; the view type cannot change.`, 'Create a new CompositeProvider instead.');
     }
     const present = new Set(current.inputs.map((i) => i.provider));
-    const notes: string[] = [];
+    const notes: string[] = [...moved];
     let handle: string | undefined;
     const done = (json: string, note: string) => {
       const r = JSON.parse(json) as { success?: boolean; message?: string; lock_handle?: string; skipped?: { field: string; reason: string }[] };
@@ -659,7 +687,7 @@ export const hcprAdapter: ObjectAdapter = {
       }
     }
 
-    if (handle === undefined) return { status: 'unchanged' };
+    if (handle === undefined) return moved.length ? { status: 'changed', activated: current.status === 'active', notes } : { status: 'unchanged' };
     return { status: 'changed', activation: { lockHandle: handle }, notes };
   },
 

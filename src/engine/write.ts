@@ -19,7 +19,7 @@ import type { Config } from '../config.js';
 import { ToolError, classify } from '../format/errors.js';
 import { matchesAny } from '../policy/policy.js';
 import type { AuditSink } from '../server/audit.js';
-import type { Location, ObjectAdapter, ObjectReader, Spec, WriteAction, WriteContext, WriteOutcome } from '../objects/adapter.js';
+import type { CallView, Location, ObjectAdapter, ObjectReader, Spec, WriteAction, WriteContext, WriteOutcome } from '../objects/adapter.js';
 import { PROVIDER, PROVIDER_TYPES } from '../objects/adapter.js';
 
 const RANK: Record<BwType, number> = {
@@ -149,7 +149,8 @@ export function plan(input: WriteInput, config: Config, adapters: EngineDeps['ad
     }
     if (name && seen.has(key(type, name))) problems.push(`${where}: listed twice`);
     seen.add(key(type, name));
-    if (action === 'create' && spec) {
+    // A create places the object there; an update with info_area moves it there.
+    if (action !== 'delete' && spec) {
       const area = adapter.targetInfoArea(name, spec);
       if (area && !matchesAny(config.allowedInfoAreas, area)) denied.push(`${where}: InfoArea ${area} is not allowed (allowed: ${config.allowedInfoAreas.join(', ')})`);
     }
@@ -169,6 +170,17 @@ export function plan(input: WriteInput, config: Config, adapters: EngineDeps['ad
   return items;
 }
 
+/** The objects of one call by type and name, for an adapter's preflight. */
+function callView(items: WriteItem[]): CallView {
+  const byKey = new Map(items.map((i) => [key(i.type, i.name), i]));
+  return {
+    spec: (type, name) => {
+      const it = byKey.get(key(type, name.toUpperCase()));
+      return it ? { action: it.action, spec: it.spec } : undefined;
+    },
+  };
+}
+
 function levels(items: WriteItem[]): WriteItem[][] {
   const byRank = new Map<number, WriteItem[]>();
   for (const it of items.filter((i) => i.action !== 'delete')) {
@@ -186,6 +198,7 @@ export async function runWrite(input: WriteInput, config: Config, client: BwClie
   const itemCtx = (it: WriteItem): WriteContext => (it.sourceSystem ? { ...ctx, sourceSystem: it.sourceSystem } : ctx);
   const results = new Map<string, ItemResult>();
   const inCall = new Set(items.map((i) => key(i.type, i.name)));
+  const call = callView(items);
 
   const blockedBy = (it: WriteItem): string | undefined => {
     const adapter = deps.adapters[it.type]!;
@@ -296,6 +309,10 @@ export async function runWrite(input: WriteInput, config: Config, client: BwClie
                 : 'Create it in the same call, or check the name with bw_search.',
             },
           };
+        }
+        const pre = (await adapter.preflight?.(client, it.action, it.name, it.spec, call)) ?? [];
+        if (pre.length) {
+          return { result: { ...base, message: `not written: ${pre.join('; ')}`, hint: 'Nothing was saved for this object. Fix the spec and call again; validate_only checks the same.' } };
         }
       }
       const loc = await adapter.locate(client, it.name, it.sourceSystem);
@@ -489,6 +506,7 @@ function format(results: ItemResult[], ctx: WriteContext, input: WriteInput): st
  */
 async function validate(items: WriteItem[], input: WriteInput, config: Config, client: BwClient, deps: EngineDeps): Promise<string> {
   const inCall = new Set(items.map((i) => key(i.type, i.name)));
+  const call = callView(items);
   const deleting = new Set(items.filter((i) => i.action === 'delete').map((i) => `${i.type}/${i.name}`));
   const lines: string[] = [];
   let problems = 0;
@@ -539,6 +557,7 @@ async function validate(items: WriteItem[], input: WriteInput, config: Config, c
           const found = await locateRef(ref.type, ref.name);
           if (found && !found.exists) issues.push(`needs ${ref.type} ${ref.name}, which does not exist`);
         }
+        issues.push(...((await adapter.preflight?.(client, it.action, it.name, it.spec, call)) ?? []));
         if (!loc.exists) {
           for (const ref of adapter.boundary?.(it.spec ?? {}) ?? []) {
             if (inCall.has(key(ref.type, ref.name))) continue;

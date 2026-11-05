@@ -44,13 +44,18 @@ function variableShort(v: Rec): string {
   return `${v['technicalName']} (${bits.join(', ')})`;
 }
 
+/** valuePresentation presentAs in the words of the spec (display key|text|key_text|text_key|none). */
+const PRESENT_WORD: Record<string, string> = { Key: 'key', Text: 'text', KeyAndText: 'key_text', TextAndKey: 'text_key', noDisplay: 'none' };
+
 function dimLabel(d: Rec): string {
   if (d['type'] === 'CustomDimension') {
     const n = ((d['members'] as unknown[]) ?? []).length;
     const named = d['technicalName'] ? `${d['technicalName']} ` : '';
     return `structure ${named}"${d['description'] ?? ''}" (${n} member${n === 1 ? '' : 's'})${d['reusable'] ? ', reusable' : ''}`;
   }
-  const name = String(d['infoObjectName'] ?? d['technicalName'] ?? d['description'] ?? '?');
+  const vp = d['valuePresentation'] as { presentAs: string; textPresentation?: string } | undefined;
+  const display = vp ? ` (display ${PRESENT_WORD[vp.presentAs] ?? vp.presentAs}${vp.textPresentation ? `, ${vp.textPresentation} text` : ''})` : '';
+  const name = String(d['infoObjectName'] ?? d['technicalName'] ?? d['description'] ?? '?') + display;
   // The display hierarchy goes with the characteristic: a filter on a hierarchy node needs it.
   return d['hierarchy'] ? `${name} [${formatDimHierarchy(d['hierarchy'] as DimHierarchy).replace(/^Hierarchy: /, 'hierarchy ').replace(/ \((active|assigned, not active)\)/, (_, x: string) => (x === 'active' ? '' : ', not active'))}]` : name;
 }
@@ -198,6 +203,7 @@ const DESCRIBE_UPDATE = [
   '                calculation {results_as, single_values_as, apply_to_result, cumulation},',
   '                exception_aggregation {type, over, all_others} (formulas), parent, position',
   '  characteristics [{field ("*" = all), area, display key|text|key_text|text_key|none,',
+  '                text standard|short|medium|long (text type of the display; needs display),',
   '                result_rows always|if_more|never, sorting {by key|text, direction},',
   '                access master_data|posted|relations, cumulate on|off, display_level,',
   '                hierarchy {name, active, expand_to_level, …}}]',

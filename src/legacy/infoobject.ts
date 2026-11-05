@@ -143,6 +143,74 @@ export function setLowerCase(xml: string, lowerCase: boolean): string {
   return xml.replace(/(<\w+:infoObject\b)/, `$1 withLowerCaseLetters="true"`);
 }
 
+/** coBWeb: the text types of a characteristic (RSDCHABAS TXTSHFL, TXTMDFL, TXTLGFL, NOLANGU). */
+export interface TextTypes {
+  short: boolean;
+  medium: boolean;
+  long: boolean;
+  languageDependent: boolean;
+}
+
+/**
+ * coBWeb: the attributes of <textProperties>. Every flag is written explicitly, the language
+ * dependency too: left out, BW keeps the value it had. null switches texts off.
+ */
+export function setTextProperties(xml: string, t: TextTypes | null): string {
+  const on = t !== null && (t.short || t.medium || t.long);
+  const attrs = on
+    ? ` languageDependentTextAvailable="${t.languageDependent}" shortTextAvailable="${t.short}" mediumTextAvailable="${t.medium}" longTextAvailable="${t.long}" withTexts="true"`
+    : ' languageDependentTextAvailable="false" shortTextAvailable="false" withTexts="false"';
+  if (!/<textProperties\b/.test(xml)) return xml;
+  return xml.replace(/<textProperties\b[^>]*?(\/?)>/, (_m, close: string) => `<textProperties${attrs}${close}>`);
+}
+
+/** coBWeb: which description a query shows (RSDCHA/RSDKYF TXTDEF: 0 = short, 1 = long). */
+export function setBexDescription(xml: string, which: 'short' | 'long'): string {
+  const v = which === 'long' ? '1' : '0';
+  if (/<bexDescription>[^<]*<\/bexDescription>/.test(xml)) return xml.replace(/<bexDescription>[^<]*<\/bexDescription>/, `<bexDescription>${v}</bexDescription>`);
+  if (/<displayProperties\s*\/>/.test(xml)) return xml.replace(/<displayProperties\s*\/>/, `<displayProperties><bexDescription>${v}</bexDescription></displayProperties>`);
+  if (/<displayProperties\b[^>]*>/.test(xml)) return xml.replace(/(<displayProperties\b[^>]*>)/, `$1<bexDescription>${v}</bexDescription>`);
+  return xml;
+}
+
+/** coBWeb: an own short description (max 20 characters) instead of the cut long one. */
+export function setShortDescription(xml: string, short: string): string {
+  let out = xml.replace(/<shortDescription>[^<]*<\/shortDescription>/, `<shortDescription>${short}</shortDescription>`);
+  out = out.replace(/(<texts\b[^/]*?)shortText="[^"]*"/, `$1shortText="${short}"`);
+  if (/\bshortDescriptionSet="/.test(out)) return out.replace(/\bshortDescriptionSet="[^"]*"/, 'shortDescriptionSet="true"');
+  return out.replace(/(<\w+:infoObject\b)/, '$1 shortDescriptionSet="true"');
+}
+
+/** coBWeb: the long and short description, the texts element and the ADT description. */
+export function setDescription(xml: string, desc: string): string {
+  let out = xml.replace(/<longDescription>[^<]*<\/longDescription>/, `<longDescription>${desc}</longDescription>`);
+  out = out.replace(/<shortDescription>[^<]*<\/shortDescription>/, `<shortDescription>${desc}</shortDescription>`);
+  out = out.replace(/(<texts\b[^/]*?)longText="[^"]*"/, `$1longText="${desc}"`);
+  out = out.replace(/(<texts\b[^/]*?)shortText="[^"]*"/, `$1shortText="${desc}"`);
+  return out.replace(/\badtcore:description="[^"]*"/, `adtcore:description="${desc}"`);
+}
+
+/**
+ * coBWeb: the <referencedInfoObject> element for a reference characteristic, from the active
+ * document of the characteristic it refers to, and the properties the new one takes over.
+ */
+export async function referenceOf(name: string): Promise<{ element: string; dataType: string; length: number; conversion: string }> {
+  const client = createClientFromEnv();
+  const upper = name.toUpperCase();
+  const xml = (await client.get(`/sap/bw/modeling/iobj/${bwSeg(name.toLowerCase())}/a?forceCacheUpdate=true`, MEDIA_TYPES['iobj'])).body;
+  const xsiType = xml.match(/<\w+:infoObject\b[^>]*\bxsi:type="\w+:(\w+)"/)?.[1] ?? 'Characteristic';
+  const kind = xml.match(/<infoObjectType>([^<]*)<\/infoObjectType>/)?.[1] ?? 'CHA';
+  if (kind === 'KYF') throw new Error(`${upper} is a key figure; a characteristic can only refer to a characteristic.`);
+  const props = parseInfoObjectProps(xml);
+  const long = xml.match(/<longDescription>([^<]*)<\/longDescription>/)?.[1] ?? props.label;
+  return {
+    element: `<referencedInfoObject ref="iobj:${xsiType} ${upper}.iobj#//" name="${upper}" infoObjectType="${kind}" description="${long}" shortDescription="${props.label}"/>`,
+    dataType: props.dataType,
+    length: Number(props.length) || 10,
+    conversion: xml.match(/<\w+:infoObject\b[^>]*\bconversionRoutine="([^"]*)"/)?.[1] ?? '',
+  };
+}
+
 // ── bwCreateInfoObject ────────────────────────────────────────────────────────
 
 export interface CreateInfoObjectArgs {
@@ -159,7 +227,14 @@ export interface CreateInfoObjectArgs {
   /** coBWeb: hierarchies allowed for the characteristic. */
   with_hierarchies?: boolean;
   lower_case?: boolean;
+  /** coBWeb: reference characteristic; type, length, conversion, master data and texts come from it. */
   referenced_infoobject?: string;
+  /** coBWeb: text types; with_texts true without them means short texts only. */
+  text_types?: TextTypes;
+  /** coBWeb: description shown in queries. */
+  bex_description?: 'short' | 'long';
+  /** coBWeb: own short description (max 20 characters). */
+  short_description?: string;
   // KYF
   object_specific_data_type?: string;
   aggregation_type?: string;
@@ -265,7 +340,8 @@ export async function bwCreateInfoObject(
     await client.unlock('iobj', nameLower);
 
     // fixedUnit / fixedCurrency: SAP only accepts these via PUT after creation
-    if (args.fixed_unit || args.fixed_currency) {
+    // coBWeb: so do the description shown in queries and an own short description.
+    if (args.fixed_unit || args.fixed_currency || args.bex_description || args.short_description) {
       const freshClient = createClientFromEnv();
       const getResult = await freshClient.get(`/sap/bw/modeling/iobj/${bwSeg(nameLower)}/m`, MEDIA_TYPES['iobj']);
       const timestamp = getResult.headers['timestamp'] ?? getResult.headers['TIMESTAMP'];
@@ -281,6 +357,8 @@ export async function bwCreateInfoObject(
         const cur = args.fixed_currency.toUpperCase();
         xml = xml.replace('<unitCurrencyInfoObjectRef', `<fixedCurrency>${cur}</fixedCurrency><unitCurrencyInfoObjectRef`);
       }
+      if (args.bex_description) xml = setBexDescription(xml, args.bex_description);
+      if (args.short_description) xml = setShortDescription(xml, args.short_description);
 
       await freshClient.put('iobj', nameLower, putLockHandle, xml, timestamp, args.transport);
       await client.unlock('iobj', nameLower);
@@ -349,10 +427,12 @@ export async function bwCreateInfoObject(
   // Normalise masterDataAccess — GET returns type="GEN" but PUT expects explicit empty attrs
   putXml = putXml.replace(/<masterDataAccess[^/]*\/>/, '<masterDataAccess readClass="" sapHanaPackage="" sapHanaView=""/>');
 
-  const chaDataType = (args.data_type ?? 'CHAR').toUpperCase();
-  const chaLength = args.length ?? 10;
+  // coBWeb: a reference characteristic takes type, length and conversion from the one it refers to.
+  const reference = args.referenced_infoobject ? await referenceOf(args.referenced_infoobject) : undefined;
+  const chaDataType = reference?.dataType ?? (args.data_type ?? 'CHAR').toUpperCase();
+  const chaLength = reference?.length ?? args.length ?? 10;
   const defaultConv = (chaDataType === 'CHAR' || chaDataType === 'NUMC') ? 'ALPHA' : '';
-  const chaConv = args.conversion_routine ?? defaultConv;
+  const chaConv = reference ? reference.conversion : args.conversion_routine ?? defaultConv;
   const withMasterData = args.with_master_data ?? false;
   const withTexts = args.with_texts ?? false;
   const lowerCase = args.lower_case ?? false;
@@ -366,29 +446,28 @@ export async function bwCreateInfoObject(
     // Add conversionRoutine attribute to root element if not present
     putXml = putXml.replace(/(<iobj:infoObject\b)/, `$1 conversionRoutine="${chaConv}"`);
   }
-  putXml = setLowerCase(putXml, lowerCase);
-  if (args.with_hierarchies) putXml = setHierarchies(putXml, true);
+  if (!reference) putXml = setLowerCase(putXml, lowerCase);
+  if (args.with_hierarchies && !reference) putXml = setHierarchies(putXml, true);
   // CHA child elements
   putXml = putXml.replace(/<dataType>[^<]*<\/dataType>/, `<dataType>${chaDataType}</dataType>`);
   putXml = putXml.replace(/<length>[^<]*<\/length>/, `<length>${chaLength}</length>`);
 
   // masterDataProperties — GET response has NO withMasterData attribute; PUT must add it
-  putXml = putXml.replace(
-    /<masterDataProperties(\s[^>]*)?>/,
-    `<masterDataProperties withMasterData="${withMasterData}">`
-  );
+  // coBWeb: not for a reference characteristic, whose master data is the referenced one's.
+  if (!reference) {
+    putXml = putXml.replace(
+      /<masterDataProperties(\s[^>]*)?>/,
+      `<masterDataProperties withMasterData="${withMasterData}">`
+    );
+  }
 
-  // textProperties — set withTexts / shortTextAvailable / languageDependentTextAvailable
-  if (withTexts) {
-    putXml = putXml.replace(
-      /<textProperties(\s[^>]*)?>/,
-      `<textProperties shortTextAvailable="true" withTexts="true">`
-    );
+  // textProperties — coBWeb: text types and language dependency written explicitly; texts: true
+  // without types stays short texts only. A reference characteristic uses the texts of the other.
+  if (reference) {
+    putXml = putXml.replace(/<referencedInfoObject\b[^>]*\/>|<referencedInfoObject\b[^>]*>[\s\S]*?<\/referencedInfoObject>/, reference.element);
+    if (!/<referencedInfoObject\b/.test(putXml)) putXml = putXml.replace(/(<length>)/, `${reference.element}$1`);
   } else {
-    putXml = putXml.replace(
-      /<textProperties(\s[^>]*)?>/,
-      `<textProperties languageDependentTextAvailable="false" shortTextAvailable="false" withTexts="false">`
-    );
+    putXml = setTextProperties(putXml, withTexts ? args.text_types ?? { short: true, medium: false, long: false, languageDependent: false } : null);
   }
 
   // Common substitutions — descriptions, InfoArea, texts element, hana mapping
@@ -412,6 +491,8 @@ export async function bwCreateInfoObject(
   putXml = putXml.replace(/<infoArea>[^<]*<\/infoArea>/, `<infoArea>${infoArea}</infoArea>`);
   putXml = putXml.replace(/(<sourceField\b[^/]*?)\bdescription="[^"]*"/, `$1description="${desc}"`);
   putXml = putXml.replace(/(<sourceField\b[^/]*?)\bshortDescription="[^"]*"/, `$1shortDescription="${desc}"`);
+  if (args.bex_description) putXml = setBexDescription(putXml, args.bex_description);
+  if (args.short_description) putXml = setShortDescription(putXml, args.short_description);
 
   // Step 6: Insert compoundParent elements if compound_infoobjects is provided (CHA only)
   if (args.compound_infoobjects && args.compound_infoobjects.length > 0) {
@@ -535,6 +616,12 @@ export interface UpdateInfoObjectArgs {
   hierarchies?: boolean;
   fixed_unit?: string;
   fixed_currency?: string;
+  /** coBWeb: text types; null switches texts off. */
+  text_types?: TextTypes | null;
+  /** coBWeb: description shown in queries. */
+  bex_description?: 'short' | 'long';
+  /** coBWeb: own short description (max 20 characters). */
+  short_description?: string;
   transport?: string;
 }
 
@@ -579,14 +666,9 @@ export async function bwUpdateInfoObject(
       if (args.lower_case !== undefined) {
         throw new Error(`InfoObject '${nameUpper}' is a Key Figure — lower_case applies to Characteristics (CHA) only.`);
       }
-      if (args.description) {
-        const desc = args.description;
-        xml = xml.replace(/<longDescription>[^<]*<\/longDescription>/, `<longDescription>${desc}</longDescription>`);
-        xml = xml.replace(/<shortDescription>[^<]*<\/shortDescription>/, `<shortDescription>${desc}</shortDescription>`);
-        xml = xml.replace(/(<texts\b[^/]*?)longText="[^"]*"/, `$1longText="${desc}"`);
-        xml = xml.replace(/(<texts\b[^/]*?)shortText="[^"]*"/, `$1shortText="${desc}"`);
-        xml = xml.replace(/\badtcore:description="[^"]*"/, `adtcore:description="${desc}"`);
-      }
+      if (args.description) xml = setDescription(xml, args.description);
+      if (args.bex_description) xml = setBexDescription(xml, args.bex_description);
+      if (args.short_description) xml = setShortDescription(xml, args.short_description);
       if (args.fixed_unit) {
         const unit = args.fixed_unit.toUpperCase();
         if (/<fixedUnit>/.test(xml)) {
@@ -710,16 +792,12 @@ export async function bwUpdateInfoObject(
       xml = setLowerCase(xml, args.lower_case);
     }
     if (args.hierarchies !== undefined) xml = setHierarchies(xml, args.hierarchies);
+    if (args.text_types !== undefined) xml = setTextProperties(xml, args.text_types);
 
     // Patch description if provided
-    if (args.description) {
-      const desc = args.description;
-      xml = xml.replace(/<longDescription>[^<]*<\/longDescription>/, `<longDescription>${desc}</longDescription>`);
-      xml = xml.replace(/<shortDescription>[^<]*<\/shortDescription>/, `<shortDescription>${desc}</shortDescription>`);
-      xml = xml.replace(/(<texts\b[^/]*?)longText="[^"]*"/, `$1longText="${desc}"`);
-      xml = xml.replace(/(<texts\b[^/]*?)shortText="[^"]*"/, `$1shortText="${desc}"`);
-      xml = xml.replace(/\badtcore:description="[^"]*"/, `adtcore:description="${desc}"`);
-    }
+    if (args.description) xml = setDescription(xml, args.description);
+    if (args.bex_description) xml = setBexDescription(xml, args.bex_description);
+    if (args.short_description) xml = setShortDescription(xml, args.short_description);
 
     // Step 8: PUT full XML — same fresh session as GET
     await freshClient.put('iobj', nameLower, lockHandle, xml, timestamp, args.transport);
@@ -736,6 +814,9 @@ export async function bwUpdateInfoObject(
   if (replaceAttributes) changes.push(`${attributes.length} attribute(s)`);
   if (args.lower_case !== undefined) changes.push(`lowerCase=${args.lower_case}`);
   if (args.description) changes.push('description');
+  if (args.text_types !== undefined) changes.push('texts');
+  if (args.bex_description) changes.push('description in queries');
+  if (args.short_description) changes.push('short description');
 
   const result: Record<string, unknown> = { success: true, name: nameUpper };
   if (replaceAttributes) {

@@ -337,7 +337,7 @@ export function externalDate(value: string, datfm: string): string {
 const userDateFormat = new WeakMap<BwClient, Promise<string | undefined>>();
 
 /** USR01-DATFM of the logon user (cached per client), or undefined when it cannot be read. */
-async function dateFormatOf(client: BwClient): Promise<string | undefined> {
+export async function dateFormatOf(client: BwClient): Promise<string | undefined> {
   let p = userDateFormat.get(client);
   if (!p) {
     p = (async () => {

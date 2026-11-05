@@ -52,7 +52,7 @@ Parameters and examples: [docs/TOOLS.md](docs/TOOLS.md).
 | Code | Object | Read | Write |
 |---|---|---|---|
 | `AREA` | InfoArea | ✔ | create, update, delete |
-| `IOBJ` | InfoObject (characteristics, key figures, attributes, compounding, hierarchies) | ✔ | create, update, delete |
+| `IOBJ` | InfoObject (characteristics, key figures, attributes, compounding, reference characteristics, text types, hierarchies) | ✔ | create, update, delete |
 | `ADSO` | DataStore object (advanced) incl. fields without InfoObject, keys, settings, planning | ✔ | create, update, delete |
 | `HCPR` | CompositeProvider (union, join), mappings, field groups | ✔ | create, update, delete |
 | `TRCS` | InfoSource | ✔ | create, update, delete |

@@ -29,6 +29,8 @@ import { bwGetFilterValues, bwQueryData, parseMetaData, parseVariablesContainer,
 import { bwActivateRequest, bwDeleteRequest, bwGetRequest, bwListRequests } from '../legacy/request_monitor.js';
 import { bwCreateTransportTask } from '../legacy/transport.js';
 import { READERS } from '../objects/registry.js';
+import { MEDIA_TYPES, bwSeg, freshRead } from '../bw/client.js';
+import { dateFormatOf, externalDate } from '../objects/dtpa.js';
 import { matchesAny } from '../policy/policy.js';
 import type { HandlerContext } from './context.js';
 
@@ -195,6 +197,51 @@ function list(v: unknown): string[] {
   return [];
 }
 
+const DATE_VALUE = /^(\d{8}|\d{4}-\d{2}-\d{2})$/;
+
+/**
+ * Variable values on a date characteristic given as YYYYMMDD or YYYY-MM-DD, converted to the
+ * logon user's date format: BW reads variable values in the external format only and answers
+ * anything else with "Variables exist - enter values and submit".
+ */
+export async function datesToExternal(
+  variables: VariableInput[],
+  dataTypeOf: (iobj: string) => Promise<string | undefined>,
+  dateFormat: () => Promise<string | undefined>,
+): Promise<void> {
+  for (const v of variables) {
+    if (!v.iobj || !v.values.some((x) => DATE_VALUE.test(x.low) || (x.high !== undefined && DATE_VALUE.test(x.high)))) continue;
+    if ((await dataTypeOf(v.iobj)) !== 'DATS') continue;
+    const datfm = await dateFormat();
+    if (!datfm) continue;
+    for (const x of v.values) {
+      if (DATE_VALUE.test(x.low)) x.low = externalDate(x.low, datfm);
+      if (x.high !== undefined && DATE_VALUE.test(x.high)) x.high = externalDate(x.high, datfm);
+    }
+  }
+}
+
+async function iobjDataType(iobj: string): Promise<string | undefined> {
+  try {
+    const xml = (await freshRead(`/sap/bw/modeling/iobj/${bwSeg(iobj.toLowerCase())}/a`, MEDIA_TYPES['iobj'])).body;
+    return xml.match(/<dataType>([^<]*)<\/dataType>/)?.[1]?.toUpperCase();
+  } catch {
+    return undefined;
+  }
+}
+
+/** BW's answer to variable values it cannot read, as an input error with the formats it takes. */
+export function variableRefusal(err: unknown, variables: VariableInput[] | undefined): unknown {
+  const msg = err instanceof Error ? err.message : String(err);
+  if (!variables?.length || !/Variables exist|enter values and submit/i.test(msg)) return err;
+  const given = variables.map((v) => `${v.name.trim().split(/\s+/)[0]} = ${v.values.map((x) => (x.high !== undefined ? `${x.low}..${x.high}` : x.low)).join(',')}`).join('; ');
+  return new ToolError(
+    'validation',
+    `BW did not accept the variable values (${given}).`,
+    'Give values in the external format: dates as YYYYMMDD (converted to the date format of the logon user) or as BW shows them, e.g. 31.12.2025; months as 202512; an interval as "A..B", several values comma-separated. Mandatory variables need a value; bw_read(type="QUERY", part="variables") lists them.',
+  );
+}
+
 async function queryData(client: BwClient, args: JsonObject): Promise<string> {
   const name = need(args, 'source', 'bw_data(action="query")').toUpperCase();
   // A query, else an InfoProvider read directly.
@@ -211,14 +258,19 @@ async function queryData(client: BwClient, args: JsonObject): Promise<string> {
   if (!asked) return words(await bwQueryData(client, name, !isQuery, 'text', undefined, undefined, offset, offset + max, undefined, stats));
   const meta = await bwQueryData(client, name, !isQuery, 'raw', undefined, undefined, 0, 1);
   const { state, variables } = buildState(meta, args);
-  // Each drill step is found in the result of the steps before it: a collapsed node moves
-  // the tuples below it.
-  const ops: DrillOperation[] = [];
-  for (const d of drills) {
-    const raw = await bwQueryData(client, name, !isQuery, 'raw', state, variables, 0, 10000, ops.length ? ops : undefined);
-    ops.push(findDrill(raw, d.node, d.collapse));
+  if (variables) await datesToExternal(variables, iobjDataType, () => dateFormatOf(client));
+  try {
+    // Each drill step is found in the result of the steps before it: a collapsed node moves
+    // the tuples below it.
+    const ops: DrillOperation[] = [];
+    for (const d of drills) {
+      const raw = await bwQueryData(client, name, !isQuery, 'raw', state, variables, 0, 10000, ops.length ? ops : undefined);
+      ops.push(findDrill(raw, d.node, d.collapse));
+    }
+    return words(await bwQueryData(client, name, !isQuery, 'text', state, variables, offset, offset + max, ops.length ? ops : undefined, stats));
+  } catch (err) {
+    throw variableRefusal(err, variables);
   }
-  return words(await bwQueryData(client, name, !isQuery, 'text', state, variables, offset, offset + max, ops.length ? ops : undefined, stats));
 }
 
 export async function bwData(args: JsonObject, ctx: HandlerContext): Promise<string> {
